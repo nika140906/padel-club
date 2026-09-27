@@ -1,0 +1,19 @@
+# Virtual environment
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+htmlcov/
+
+# SQLite database (created at runtime, never committed)
+data/
+*.db
+*.sqlite
+
+# OS / editor noise
+.DS_Store
