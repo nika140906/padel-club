@@ -6,19 +6,39 @@ TODO: Describe the app and its two feature domains (Court Bookings and Match Lad
 
 ## Setup
 
-TODO: Steps to clone the repo, create the virtual environment and install `requirements.txt`.
+Requires Python 3.12+.
+
+```bash
+git clone https://github.com/nika140906/padel-club.git
+cd padel-club
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
 ## Run
 
-TODO: The single command that starts the app.
+```bash
+python app.py
+```
+
+The app starts on `http://0.0.0.0:8000`. Check it is up with `curl http://localhost:8000/health`, which returns `{"status": "ok"}`.
 
 ## Configuration
 
+All configuration is done with environment variables. None are required.
+
 | Variable   | Default | Purpose                                     |
 |------------|---------|---------------------------------------------|
-| `PORT`     | TODO    | Port the app listens on (binds to 0.0.0.0)  |
-| `DATA_DIR` | TODO    | Folder where the SQLite database file lives |
+| `PORT`     | `8000`  | Port the app listens on (binds to 0.0.0.0)  |
+| `DATA_DIR` | `data`  | Folder where the SQLite database file lives |
+
+Example: `PORT=9000 DATA_DIR=/tmp/padel python app.py`
 
 ## Tests & Coverage
 
-TODO: The coverage command and the latest coverage result.
+```bash
+pytest --cov=app
+```
+
+TODO: Latest coverage result.
