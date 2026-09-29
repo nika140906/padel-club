@@ -31,14 +31,14 @@ All configuration is done with environment variables. None are required.
 | Variable   | Default | Purpose                                     |
 |------------|---------|---------------------------------------------|
 | `PORT`     | `8000`  | Port the app listens on (binds to 0.0.0.0)  |
-| `DATA_DIR` | `data`  | Folder where the SQLite database file lives |
+| `DATA_DIR` | `data`  | Folder for the SQLite database, stored at `DATA_DIR/padel.db` and created automatically on start |
 
 Example: `PORT=9000 DATA_DIR=/tmp/padel python app.py`
 
 ## Tests & Coverage
 
 ```bash
-pytest --cov=app
+pytest --cov=padel --cov=app
 ```
 
 TODO: Latest coverage result.
