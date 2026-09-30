@@ -1,6 +1,8 @@
 import os
 import sqlite3
 
+from flask import current_app, g
+
 from padel.auth.schema import SCHEMA as AUTH_SCHEMA
 from padel.bookings.schema import SCHEMA as BOOKINGS_SCHEMA
 from padel.ladder.schema import SCHEMA as LADDER_SCHEMA
@@ -28,4 +30,18 @@ def init_db(db_path):
             conn.executescript(schema)
         conn.commit()
     finally:
+        conn.close()
+
+
+def get_db():
+    """Return this request's connection, opening it on first use."""
+    if "db" not in g:
+        g.db = connect(current_app.config["DB_PATH"])
+    return g.db
+
+
+def close_db(error=None):
+    """Close this request's connection. Flask calls this after every request."""
+    conn = g.pop("db", None)
+    if conn is not None:
         conn.close()

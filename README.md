@@ -32,6 +32,7 @@ All configuration is done with environment variables. None are required.
 |------------|---------|---------------------------------------------|
 | `PORT`     | `8000`  | Port the app listens on (binds to 0.0.0.0)  |
 | `DATA_DIR` | `data`  | Folder for the SQLite database, stored at `DATA_DIR/padel.db` and created automatically on start |
+| `SECRET_KEY` | random on each start | Signs the login cookie. Set it so logins survive a restart |
 
 Example: `PORT=9000 DATA_DIR=/tmp/padel python app.py`
 
