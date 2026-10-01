@@ -18,3 +18,16 @@ def conn(tmp_path):
 def client(tmp_path):
     """A test client for an app that uses a fresh database."""
     return create_app(data_dir=str(tmp_path)).test_client()
+
+
+def log_in_as(client, username, password="secret123"):
+    """Register a user and log them in on this client."""
+    client.post("/auth/register", json={"username": username, "password": password})
+    client.post("/auth/login", json={"username": username, "password": password})
+
+
+@pytest.fixture
+def logged_in_client(client):
+    """A test client where the user "nika" is logged in."""
+    log_in_as(client, "nika")
+    return client
