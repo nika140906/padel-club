@@ -14,7 +14,7 @@ from padel.ladder.service import (
 @pytest.fixture
 def four_players(conn):
     for user_id in (1, 2, 3, 4):
-        join_ladder(conn, user_id)
+        join_ladder(conn, user_id, f"player{user_id}")
     return conn
 
 
@@ -44,16 +44,30 @@ def test_upset_win_is_worth_more_than_expected_win():
 # --- Joining ---------------------------------------------------------------
 
 def test_new_player_starts_at_1000_with_no_matches(conn):
-    player = join_ladder(conn, 1)
+    player = join_ladder(conn, 1, "nika")
 
-    assert player == {"user_id": 1, "rating": 1000, "matches_played": 0}
+    assert player == {"user_id": 1, "nickname": "nika", "rating": 1000, "matches_played": 0}
 
 
-def test_joining_twice_keeps_one_player(conn):
-    join_ladder(conn, 1)
-    join_ladder(conn, 1)
+def test_joining_twice_keeps_the_first_nickname(conn):
+    join_ladder(conn, 1, "nika")
+    player = join_ladder(conn, 1, "other_name")
 
+    assert player["nickname"] == "nika"
     assert len(leaderboard(conn)) == 1
+
+
+def test_nickname_must_be_unique(conn):
+    join_ladder(conn, 1, "nika")
+
+    with pytest.raises(LadderError, match="already taken"):
+        join_ladder(conn, 2, "nika")
+
+
+@pytest.mark.parametrize("nickname", ["a", "x" * 21, "has space", None, 7])
+def test_invalid_nickname_is_rejected(conn, nickname):
+    with pytest.raises(LadderError, match="nickname must be"):
+        join_ladder(conn, 1, nickname)
 
 
 def test_get_unknown_player_is_none(conn):
@@ -114,8 +128,8 @@ def test_only_a_player_in_the_match_can_record_it(four_players):
 
 
 def test_players_must_have_joined_the_ladder(conn):
-    join_ladder(conn, 1)
-    join_ladder(conn, 2)
+    join_ladder(conn, 1, "player1")
+    join_ladder(conn, 2, "player2")
 
     with pytest.raises(LadderError, match=r"\[3, 4\] have not joined"):
         record_match(conn, 1, [1, 2], [3, 4], "A")
@@ -132,8 +146,10 @@ def test_rejected_match_changes_nothing(four_players):
 
 def test_leaderboard_is_sorted_by_rating(four_players):
     record_match(four_players, 1, [1, 2], [3, 4], "A")
-    join_ladder(four_players, 5)  # new player, 1000, no matches
+    join_ladder(four_players, 5, "newcomer")  # 1000 points, no matches
 
-    order = [p["user_id"] for p in leaderboard(four_players)]
+    board = leaderboard(four_players)
 
-    assert order == [1, 2, 5, 3, 4]
+    assert [p["user_id"] for p in board] == [1, 2, 5, 3, 4]
+    assert [p["rank"] for p in board] == [1, 2, 3, 4, 5]
+    assert board[2]["nickname"] == "newcomer"

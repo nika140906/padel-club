@@ -2,9 +2,12 @@
 # Padel is played in pairs, so a match has two players per team.
 # user ids point at auth's users table but have no FOREIGN KEY,
 # so this domain never depends on another domain's tables.
+# Players choose a nickname when they join, so the leaderboard can show
+# names without reading the users table.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS players (
     user_id        INTEGER PRIMARY KEY,
+    nickname       TEXT    NOT NULL UNIQUE,
     rating         INTEGER NOT NULL DEFAULT 1000,
     matches_played INTEGER NOT NULL DEFAULT 0
 );

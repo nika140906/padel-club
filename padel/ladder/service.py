@@ -1,4 +1,8 @@
+import re
+import sqlite3
+
 K_FACTOR = 32  # the most a rating can move in one match
+NICKNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,20}$")
 
 
 class LadderError(Exception):
@@ -16,16 +20,27 @@ def rating_change(team_a_rating, team_b_rating, team_a_won):
     return round(K_FACTOR * (actual - expected_score(team_a_rating, team_b_rating)))
 
 
-def join_ladder(conn, user_id):
-    """Add a member to the ladder. Joining twice does nothing."""
-    conn.execute("INSERT OR IGNORE INTO players (user_id) VALUES (?)", (user_id,))
+def join_ladder(conn, user_id, nickname):
+    """Add a member to the ladder under a nickname. Joining twice does nothing."""
+    existing = get_player(conn, user_id)
+    if existing is not None:
+        return existing
+    if not isinstance(nickname, str) or not NICKNAME_PATTERN.match(nickname):
+        raise LadderError("nickname must be 2-20 letters, digits or underscores")
+
+    try:
+        conn.execute(
+            "INSERT INTO players (user_id, nickname) VALUES (?, ?)", (user_id, nickname)
+        )
+    except sqlite3.IntegrityError:
+        raise LadderError("nickname is already taken")
     conn.commit()
     return get_player(conn, user_id)
 
 
 def get_player(conn, user_id):
     row = conn.execute(
-        "SELECT user_id, rating, matches_played FROM players WHERE user_id = ?",
+        "SELECT user_id, nickname, rating, matches_played FROM players WHERE user_id = ?",
         (user_id,),
     ).fetchone()
     return dict(row) if row else None
@@ -81,9 +96,12 @@ def _apply_result(conn, user_id, change):
 
 
 def leaderboard(conn):
-    """All players, best rating first. Ties go to whoever has played more."""
+    """All players, best rating first, numbered from rank 1.
+
+    Ties go to whoever has played more matches.
+    """
     rows = conn.execute(
-        "SELECT user_id, rating, matches_played FROM players "
+        "SELECT user_id, nickname, rating, matches_played FROM players "
         "ORDER BY rating DESC, matches_played DESC, user_id"
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [{"rank": rank, **dict(row)} for rank, row in enumerate(rows, start=1)]

@@ -63,7 +63,9 @@ def test_booking_must_end_after_it_starts(db_path):
 def test_match_winner_must_be_a_or_b(db_path):
     conn = connect(db_path)
     for user_id in (1, 2, 3, 4):
-        conn.execute("INSERT INTO players (user_id) VALUES (?)", (user_id,))
+        conn.execute(
+            "INSERT INTO players (user_id, nickname) VALUES (?, ?)", (user_id, f"p{user_id}")
+        )
 
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
