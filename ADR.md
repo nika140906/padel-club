@@ -43,3 +43,11 @@ Context: The brief asks for at least 70% coverage of the core business logic of 
 Decision: Most tests call the `service.py` functions directly, using a fresh SQLite file per test in pytest's `tmp_path` instead of mocking the database, and pass in a fixed `now` so date rules do not depend on the day the tests run. Route tests use Flask's test client and only check what the routes add: login required (401) and the status codes 201, 400, 404 and 409.
 Alternatives considered: Testing everything through the HTTP routes. It would reach the same lines, but a failing test would not show which rule broke, and every rule would need a login first. Mocking the database was also rejected, because many rules (overlaps, uniqueness, CHECK constraints) live in SQL and a mock would not run that SQL.
 Consequences: Coverage is about 99% and each rule has a test named after it, so a failure points straight at the broken rule. Left thinner: the `python app.py` start-up lines, and two members booking the same slot at the exact same moment, which these single-request tests cannot reproduce.
+
+## 5. Do not build a web frontend; ship a JSON API only
+Date: 2026-10-03
+Status: Decided
+Context: Club members will eventually want pages to book courts and see the leaderboard, but the assignment had one week, and the grade rests on the two backend domains, their tests and the design records. The choice was made on 2026-09-29, before the routes were written, and is recorded here now that both domains are finished.
+Decision: The app is a JSON API only. There are no HTML pages, templates, CSS or JavaScript; the features are used with curl, as shown in the README, or through Flask's test client.
+Alternatives considered: Simple HTML pages with Flask templates (a login page, a booking page and a leaderboard page). They would make the app easier to demo, but they would add around 6-8 template files, form handling and more routes to test, taking time away from the booking rules, the Elo logic and their tests.
+Consequences: All the time went into the two domains, auth and tests (110 tests, 99% coverage), and the API is ready for any frontend or for other services to call when the app is split up later. The cost is that a real member cannot use the app without a separate frontend, which would be the next thing to build.
