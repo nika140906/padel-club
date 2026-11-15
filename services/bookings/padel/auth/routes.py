@@ -1,7 +1,8 @@
-from flask import Blueprint, request, session
+from flask import Blueprint, current_app, request
 
 from padel.auth.decorators import current_user_id, login_required
 from padel.auth.service import AuthError, authenticate, get_username, register_user
+from padel.auth.tokens import make_token
 from padel.db import get_db
 
 bp = Blueprint("auth", __name__, url_prefix="/auth")
@@ -19,20 +20,18 @@ def register():
 
 @bp.post("/login")
 def login():
+    """Check the password and hand back a token for the Authorization header.
+
+    There is no logout route: tokens are not stored on the server, so the
+    UI logs out by forgetting its token.
+    """
     data = request.get_json(silent=True) or {}
     try:
         user_id = authenticate(get_db(), data.get("username"), data.get("password"))
     except AuthError as error:
         return {"error": str(error)}, 401
-    session.clear()
-    session["user_id"] = user_id
-    return {"id": user_id, "username": data["username"]}
-
-
-@bp.post("/logout")
-def logout():
-    session.clear()
-    return {"status": "logged out"}
+    token = make_token(current_app.config["TOKEN_SECRET"], user_id)
+    return {"id": user_id, "username": data["username"], "token": token}
 
 
 @bp.get("/me")

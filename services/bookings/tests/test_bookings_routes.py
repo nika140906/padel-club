@@ -1,6 +1,6 @@
 import pytest
 
-from tests.conftest import log_in_as
+from tests.conftest import log_in_as, log_out
 
 # A date far in the future, so these tests never fail as "in the past".
 DAY = "2030-06-01"
@@ -104,7 +104,7 @@ def test_cancel_own_booking(logged_in_client):
 
 def test_cannot_cancel_another_members_booking(logged_in_client):
     booking_id = book(logged_in_client).get_json()["id"]
-    logged_in_client.post("/auth/logout")
+    log_out(logged_in_client)
     log_in_as(logged_in_client, "someone_else")
 
     response = logged_in_client.delete(f"/bookings/{booking_id}")

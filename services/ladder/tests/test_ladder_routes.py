@@ -3,17 +3,17 @@ import pytest
 from tests.conftest import log_in_as
 
 
-def join_as(client, username):
-    """Log in as a new member, join the ladder under the same name, return their id."""
-    client.post("/auth/logout")
-    log_in_as(client, username)
-    return client.post("/ladder/join", json={"nickname": username}).get_json()["user_id"]
+def join_as(client, user_id, nickname):
+    """Log in as this member, join the ladder under the nickname, return their id."""
+    log_in_as(client, user_id)
+    return client.post("/ladder/join", json={"nickname": nickname}).get_json()["user_id"]
 
 
 @pytest.fixture
 def four_members(client):
     """Four members on the ladder; the last one (dan) stays logged in."""
-    ids = [join_as(client, name) for name in ("alice", "bob", "carol", "dan")]
+    names = ("alice", "bob", "carol", "dan")
+    ids = [join_as(client, user_id, name) for user_id, name in enumerate(names, start=1)]
     return client, ids
 
 
@@ -77,7 +77,7 @@ def test_record_match_with_bad_data_returns_400(four_members):
 
 def test_member_not_in_the_match_cannot_record_it(four_members):
     client, (alice, bob, carol, dan) = four_members
-    join_as(client, "erin")  # erin is now logged in
+    join_as(client, 5, "erin")  # erin is now logged in
 
     response = client.post(
         "/ladder/matches",
@@ -86,3 +86,9 @@ def test_member_not_in_the_match_cannot_record_it(four_members):
 
     assert response.status_code == 400
     assert "only a player" in response.get_json()["error"]
+
+
+def test_fake_token_returns_401(client):
+    client.environ_base["HTTP_AUTHORIZATION"] = "Bearer not-a-real-token"
+
+    assert client.get("/ladder/leaderboard").status_code == 401

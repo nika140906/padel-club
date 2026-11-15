@@ -20,7 +20,7 @@ def table_names(conn):
 def test_init_db_creates_all_tables(db_path):
     conn = connect(db_path)
 
-    assert table_names(conn) == {"users", "courts", "bookings", "players", "matches"}
+    assert table_names(conn) == {"users", "courts", "bookings"}
 
 
 def test_init_db_seeds_four_courts(db_path):
@@ -59,16 +59,3 @@ def test_booking_must_end_after_it_starts(db_path):
             "VALUES (1, 1, '2026-10-01 19:00', '2026-10-01 18:00')"
         )
 
-
-def test_match_winner_must_be_a_or_b(db_path):
-    conn = connect(db_path)
-    for user_id in (1, 2, 3, 4):
-        conn.execute(
-            "INSERT INTO players (user_id, nickname) VALUES (?, ?)", (user_id, f"p{user_id}")
-        )
-
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute(
-            "INSERT INTO matches (team_a_p1, team_a_p2, team_b_p1, team_b_p2, winner, recorded_by) "
-            "VALUES (1, 2, 3, 4, 'C', 1)"
-        )

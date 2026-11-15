@@ -2,57 +2,66 @@
 
 ## Overview
 
-A small backend for a padel club of a few hundred members. It is a JSON API built with Flask and SQLite, running as a single process.
+A small backend for a padel club of a few hundred members. In Assignment 1 it was one Flask app with one SQLite database. In Assignment 2 it is being split into two services, one per feature domain, each with its own database:
 
-Members register and log in, then use two separate features:
+- **bookings** (`services/bookings/`): members register and log in, see the club's four courts, check a court's schedule for a day, book a 60 or 90 minute slot between 08:00 and 23:00, and cancel their own bookings. Double-bookings are rejected.
+- **ladder** (`services/ladder/`): members join the ladder under a nickname, record doubles matches they played in, and climb a leaderboard ranked by Elo rating (everyone starts at 1000).
 
-- **Court Bookings**: see the club's four courts, check a court's schedule for a day, book a 60 or 90 minute slot between 08:00 and 23:00, and cancel their own bookings. Double-bookings are rejected.
-- **Match Ladder**: join the ladder under a nickname, record doubles matches they played in, and climb a leaderboard ranked by Elo rating (everyone starts at 1000).
+Login lives in the bookings service. It returns a signed token, and the browser sends it to both services in the `Authorization: Bearer <token>` header. Both services check the token with the same `TOKEN_SECRET`, so the ladder knows who is logged in without calling bookings.
 
-The code is split into three modules under `padel/`: `auth`, `bookings` and `ladder`. Each owns its own tables and logic, and bookings and ladder never use each other's code (see `ADR.md`).
+```
+services/
+  bookings/   app.py, padel/auth, padel/bookings, tests/, requirements.txt
+  ladder/     app.py, padel/ladder, padel/auth (token check only), tests/, requirements.txt
+```
 
 ## Setup
 
-Requires Python 3.12+.
+Requires Python 3.12+. Each service has its own `requirements.txt`.
 
 ```bash
 git clone https://github.com/nika140906/padel-club.git
 cd padel-club
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r services/bookings/requirements.txt -r services/ladder/requirements.txt
 ```
 
 ## Run
 
+Both services need the same `TOKEN_SECRET`. Make a random one, then start each service in its own terminal with it:
+
 ```bash
-python app.py
+openssl rand -hex 32                      # copy the output
+export TOKEN_SECRET=<paste it here>       # in both terminals
+
+cd services/bookings && PORT=8001 python app.py
+cd services/ladder   && PORT=8002 python app.py
 ```
 
-The app starts on `http://0.0.0.0:8000` and creates its database on first start, so no other setup is needed. Check it is up with `curl http://localhost:8000/health`, which returns `{"status": "ok"}`.
+Never commit a real secret. Real values only live in environment variables, in a local `.env` file (ignored by Git) or in GitHub Actions secrets.
+
+Each service creates its own database on first start. Check they are up with `curl localhost:8001/health` and `curl localhost:8002/health`.
 
 ## Configuration
 
-All configuration is done with environment variables. None are required.
+Both services read the same variables:
 
-| Variable     | Default              | Purpose                                                                 |
-|--------------|----------------------|-------------------------------------------------------------------------|
-| `PORT`       | `8000`               | Port the app listens on (binds to 0.0.0.0)                              |
-| `DATA_DIR`   | `data`               | Folder for the SQLite database, stored at `DATA_DIR/padel.db` and created automatically on start |
-| `SECRET_KEY` | random on each start | Signs the login cookie. Set it so logins survive a restart              |
-
-Example: `PORT=9000 DATA_DIR=/tmp/padel SECRET_KEY=change-me python app.py`
+| Variable       | Default | Purpose |
+|----------------|---------|---------|
+| `PORT`         | `8000`  | Port the service listens on (binds to 0.0.0.0) |
+| `DATA_DIR`     | `data`  | Folder for the service's SQLite file (`bookings.db` or `ladder.db`) |
+| `TOKEN_SECRET` | none, required | Signs and checks login tokens. Must be the same in both services. The service refuses to start without it |
 
 ## API
 
-All requests and responses are JSON. Every route except `/health`, `/auth/register` and `/auth/login` needs a logged-in user, otherwise it returns `401`.
+All requests and responses are JSON. Every route except `/health`, `/auth/register` and `/auth/login` needs a valid token in the `Authorization: Bearer <token>` header, otherwise it returns `401`. Routes under `/auth`, `/courts` and `/bookings` are on the bookings service; routes under `/ladder` are on the ladder service.
 
 | Method | Path | Body | What it does |
 |--------|------|------|--------------|
 | GET    | `/health` | | Health check |
 | POST   | `/auth/register` | `{"username", "password"}` | Create an account |
-| POST   | `/auth/login` | `{"username", "password"}` | Log in (sets a session cookie) |
-| POST   | `/auth/logout` | | Log out |
+| POST   | `/auth/login` | `{"username", "password"}` | Log in, returns `{"id", "username", "token"}` |
 | GET    | `/auth/me` | | The logged-in user |
 | GET    | `/courts` | | List courts |
 | GET    | `/courts/<id>/bookings?day=YYYY-MM-DD` | | A court's bookings for one day |
@@ -69,20 +78,25 @@ Errors come back as `{"error": "..."}` with `400` (broken rule), `401` (not logg
 ### Example with curl
 
 ```bash
-curl -X POST localhost:8000/auth/register -H "Content-Type: application/json" \
+curl -X POST localhost:8001/auth/register -H "Content-Type: application/json" \
      -d '{"username": "nika", "password": "secret123"}'
-curl -c /tmp/padel-cookies.txt -X POST localhost:8000/auth/login -H "Content-Type: application/json" \
-     -d '{"username": "nika", "password": "secret123"}'
-curl -b /tmp/padel-cookies.txt -X POST localhost:8000/bookings -H "Content-Type: application/json" \
-     -d '{"court_id": 1, "start_time": "2026-10-10 18:00", "duration_minutes": 90}'
+TOKEN=$(curl -s -X POST localhost:8001/auth/login -H "Content-Type: application/json" \
+     -d '{"username": "nika", "password": "secret123"}' | python3 -c 'import sys, json; print(json.load(sys.stdin)["token"])')
+curl -X POST localhost:8001/bookings -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"court_id": 1, "start_time": "2030-06-01 18:00", "duration_minutes": 90}'
+curl -X POST localhost:8002/ladder/join -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"nickname": "nika"}'
 ```
 
-`-c` saves the login cookie and `-b` sends it back on later requests.
+There is no logout route. Tokens are not stored on the server, so a client logs out by forgetting its token. Tokens expire after 12 hours.
 
 ## Tests & Coverage
 
+Each service is tested on its own, from its own folder:
+
 ```bash
-pytest --cov=padel --cov=app
+cd services/bookings && pytest --cov=padel --cov=app
+cd services/ladder   && pytest --cov=padel --cov=app
 ```
 
-Latest result: 110 tests passed, 99% coverage (321 statements, 1 missed: the `python app.py` start-up line, which tests never run).
+Latest result: bookings 79 tests, ladder 50 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line).

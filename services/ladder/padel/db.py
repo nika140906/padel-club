@@ -3,11 +3,9 @@ import sqlite3
 
 from flask import current_app, g
 
-from padel.auth.schema import SCHEMA as AUTH_SCHEMA
-from padel.bookings.schema import SCHEMA as BOOKINGS_SCHEMA
 from padel.ladder.schema import SCHEMA as LADDER_SCHEMA
 
-DB_FILENAME = "padel.db"
+DB_FILENAME = "ladder.db"
 
 
 def get_db_path(data_dir):
@@ -22,11 +20,11 @@ def connect(db_path):
 
 
 def init_db(db_path):
-    """Create the data folder and all tables. Safe to run on every start."""
+    """Create the data folder and this service's tables. Safe to run on every start."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = connect(db_path)
     try:
-        for schema in (AUTH_SCHEMA, BOOKINGS_SCHEMA, LADDER_SCHEMA):
+        for schema in (LADDER_SCHEMA,):
             conn.executescript(schema)
         conn.commit()
     finally:

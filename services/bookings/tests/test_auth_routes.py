@@ -1,3 +1,6 @@
+from tests.conftest import use_token
+
+
 def register(client, username="nika", password="secret123"):
     return client.post("/auth/register", json={"username": username, "password": password})
 
@@ -33,9 +36,18 @@ def test_me_requires_login(client):
     assert response.get_json() == {"error": "login required"}
 
 
+def test_login_returns_a_token(client):
+    register(client)
+
+    response = login(client)
+
+    assert response.status_code == 200
+    assert response.get_json()["token"]
+
+
 def test_login_then_me_returns_current_user(client):
     register(client)
-    login(client)
+    use_token(client, login(client).get_json()["token"])
 
     response = client.get("/auth/me")
 
@@ -51,10 +63,16 @@ def test_login_with_wrong_password_returns_401(client):
     assert response.status_code == 401
 
 
-def test_logout_ends_the_session(client):
-    register(client)
-    login(client)
-
-    client.post("/auth/logout")
+def test_me_with_a_fake_token_returns_401(client):
+    use_token(client, "not-a-real-token")
 
     assert client.get("/auth/me").status_code == 401
+
+
+def test_me_with_wrong_auth_scheme_returns_401(client):
+    register(client)
+    token = login(client).get_json()["token"]
+
+    response = client.get("/auth/me", headers={"Authorization": f"Basic {token}"})
+
+    assert response.status_code == 401
