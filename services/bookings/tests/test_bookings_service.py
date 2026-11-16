@@ -153,3 +153,9 @@ def test_list_court_bookings_on_day_only_returns_that_day_and_court(conn):
 def test_list_court_bookings_rejects_bad_day(conn):
     with pytest.raises(BookingError, match="day must look like"):
         list_court_bookings_on_day(conn, 1, "01/10/2026")
+
+
+@pytest.mark.parametrize("court_id", ["1", "abc", None, True, [1]])
+def test_create_booking_rejects_court_id_that_is_not_a_number(conn, court_id):
+    with pytest.raises(BookingError, match="court_id must be a whole number"):
+        book(conn, court_id=court_id)
