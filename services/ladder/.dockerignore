@@ -1,0 +1,9 @@
+# Only the files the Dockerfile copies matter, but this keeps
+# local junk and secrets out of the build context in any case.
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.coverage
+tests/
+.env
+.env.*

@@ -1,0 +1,69 @@
+# The whole system on one machine: docker compose up --build
+#
+# Every secret comes from the .env file next to this one (copy .env.example
+# and fill it in). .env is ignored by Git. "${NAME:?...}" stops compose with a
+# message if a value is missing, so there is never a default password.
+
+services:
+  # One SQL Server holding both databases (one per service, see db/init.sql).
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64 # SQL Server only exists for Intel; Apple-chip Macs run it with Rosetta
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:1433:1433" # only this computer can connect, for tests and debugging
+    volumes:
+      - db-data:/var/opt/mssql # data survives "docker compose down" (but not "down -v")
+    healthcheck:
+      # Healthy once SQL Server answers a query. sqlcmd reads the password from SQLCMDPASSWORD.
+      test: ["CMD-SHELL", "SQLCMDPASSWORD=\"$$MSSQL_SA_PASSWORD\" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # Runs db/init.sql once SQL Server is up, then exits.
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SQLCMDPASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+      BOOKINGS_DB_PASSWORD: ${BOOKINGS_DB_PASSWORD:?set BOOKINGS_DB_PASSWORD in .env}
+      LADDER_DB_PASSWORD: ${LADDER_DB_PASSWORD:?set LADDER_DB_PASSWORD in .env}
+    volumes:
+      - ./db/init.sql:/init.sql:ro
+    # -C trusts the container's self-signed certificate; -b exits with an error if the script fails.
+    entrypoint: ["/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "db", "-U", "sa", "-b", "-i", "/init.sql"]
+    restart: "no"
+
+  bookings:
+    build: ./services/bookings
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      PORT: 8000
+      DATABASE_URL: mssql://bookings_user:${BOOKINGS_DB_PASSWORD:?set BOOKINGS_DB_PASSWORD in .env}@db:1433/bookings
+      TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
+    ports:
+      - "8001:8000"
+
+  ladder:
+    build: ./services/ladder
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      PORT: 8000
+      DATABASE_URL: mssql://ladder_user:${LADDER_DB_PASSWORD:?set LADDER_DB_PASSWORD in .env}@db:1433/ladder
+      TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
+    ports:
+      - "8002:8000"
+
+volumes:
+  db-data:
