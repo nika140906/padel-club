@@ -26,6 +26,21 @@ def parse_time(text):
         raise BookingError('time must look like "2026-10-01 18:00"')
 
 
+def booking_from_row(row):
+    """Turn a database row into the JSON shape of a booking.
+
+    SQL Server returns times as datetime objects; the API keeps sending
+    them as text like "2026-10-01 18:00", the same as before.
+    """
+    return {
+        "id": row["id"],
+        "court_id": row["court_id"],
+        "user_id": row["user_id"],
+        "start_time": row["start_time"].strftime(TIME_FORMAT),
+        "end_time": row["end_time"].strftime(TIME_FORMAT),
+    }
+
+
 def list_courts(conn):
     rows = conn.execute("SELECT id, name FROM courts ORDER BY id").fetchall()
     return [dict(row) for row in rows]
@@ -48,34 +63,36 @@ def create_booking(conn, user_id, court_id, start_time, duration_minutes, now=No
     if start.hour < OPENING_HOUR or end > closing:
         raise BookingError(f"the club is open {OPENING_HOUR}:00-{CLOSING_HOUR}:00")
 
-    court = conn.execute("SELECT id FROM courts WHERE id = ?", (court_id,)).fetchone()
+    # A text or list id would make SQL Server fail to convert it, so check the type first.
+    if not isinstance(court_id, int) or isinstance(court_id, bool):
+        raise BookingError("court_id must be a whole number")
+    court = conn.execute("SELECT id FROM courts WHERE id = %s", (court_id,)).fetchone()
     if court is None:
         raise BookingNotFound("court not found")
 
-    start_text = start.strftime(TIME_FORMAT)
-    end_text = end.strftime(TIME_FORMAT)
     # Two bookings overlap when each one starts before the other ends.
     clash = conn.execute(
-        "SELECT id FROM bookings WHERE court_id = ? AND start_time < ? AND end_time > ?",
-        (court_id, end_text, start_text),
+        "SELECT id FROM bookings WHERE court_id = %s AND start_time < %s AND end_time > %s",
+        (court_id, end, start),
     ).fetchone()
     if clash is not None:
         raise BookingConflict("court is already booked at that time")
 
-    cursor = conn.execute(
-        "INSERT INTO bookings (court_id, user_id, start_time, end_time) VALUES (?, ?, ?, ?)",
-        (court_id, user_id, start_text, end_text),
-    )
+    row = conn.execute(
+        "INSERT INTO bookings (court_id, user_id, start_time, end_time) "
+        "OUTPUT INSERTED.id VALUES (%s, %s, %s, %s)",
+        (court_id, user_id, start, end),
+    ).fetchone()
     conn.commit()
-    return get_booking(conn, cursor.lastrowid)
+    return get_booking(conn, row["id"])
 
 
 def get_booking(conn, booking_id):
     row = conn.execute(
-        "SELECT id, court_id, user_id, start_time, end_time FROM bookings WHERE id = ?",
+        "SELECT id, court_id, user_id, start_time, end_time FROM bookings WHERE id = %s",
         (booking_id,),
     ).fetchone()
-    return dict(row) if row else None
+    return booking_from_row(row) if row else None
 
 
 def cancel_booking(conn, booking_id, user_id):
@@ -85,17 +102,17 @@ def cancel_booking(conn, booking_id, user_id):
     # discover other people's bookings by guessing ids.
     if booking is None or booking["user_id"] != user_id:
         raise BookingNotFound("booking not found")
-    conn.execute("DELETE FROM bookings WHERE id = ?", (booking_id,))
+    conn.execute("DELETE FROM bookings WHERE id = %s", (booking_id,))
     conn.commit()
 
 
 def list_user_bookings(conn, user_id):
     rows = conn.execute(
         "SELECT id, court_id, user_id, start_time, end_time FROM bookings "
-        "WHERE user_id = ? ORDER BY start_time",
+        "WHERE user_id = %s ORDER BY start_time",
         (user_id,),
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [booking_from_row(row) for row in rows]
 
 
 def list_court_bookings_on_day(conn, court_id, day):
@@ -107,7 +124,7 @@ def list_court_bookings_on_day(conn, court_id, day):
     next_day = first + timedelta(days=1)
     rows = conn.execute(
         "SELECT id, court_id, user_id, start_time, end_time FROM bookings "
-        "WHERE court_id = ? AND start_time >= ? AND start_time < ? ORDER BY start_time",
-        (court_id, first.strftime(TIME_FORMAT), next_day.strftime(TIME_FORMAT)),
+        "WHERE court_id = %s AND start_time >= %s AND start_time < %s ORDER BY start_time",
+        (court_id, first, next_day),
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [booking_from_row(row) for row in rows]

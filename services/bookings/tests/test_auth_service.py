@@ -12,7 +12,7 @@ def test_register_returns_new_user_id(conn):
 def test_password_is_stored_hashed_not_plain(conn):
     register_user(conn, "nika", "secret123")
 
-    stored = conn.execute("SELECT password_hash FROM users").fetchone()[0]
+    stored = conn.execute("SELECT password_hash FROM users").fetchone()["password_hash"]
 
     assert stored != "secret123"
 
@@ -56,3 +56,9 @@ def test_authenticate_rejects_unknown_user(conn):
 
 def test_get_username_of_unknown_user_is_none(conn):
     assert get_username(conn, 999) is None
+
+
+@pytest.mark.parametrize("username", [123, None, ["nika"]])
+def test_authenticate_rejects_username_that_is_not_text(conn, username):
+    with pytest.raises(AuthError, match="invalid username or password"):
+        authenticate(conn, username, "secret123")

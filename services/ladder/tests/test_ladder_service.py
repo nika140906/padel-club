@@ -101,7 +101,7 @@ def test_recording_a_match_counts_it_for_all_four_players(four_players):
 def test_match_is_saved(four_players):
     result = record_match(four_players, 1, [1, 2], [3, 4], "A")
 
-    row = four_players.execute("SELECT * FROM matches WHERE id = ?", (result["id"],)).fetchone()
+    row = four_players.execute("SELECT * FROM matches WHERE id = %s", (result["id"],)).fetchone()
     assert (row["team_a_p1"], row["team_b_p2"], row["winner"]) == (1, 4, "A")
 
 

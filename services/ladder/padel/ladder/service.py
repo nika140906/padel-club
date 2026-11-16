@@ -1,5 +1,6 @@
 import re
-import sqlite3
+
+import pymssql
 
 K_FACTOR = 32  # the most a rating can move in one match
 NICKNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,20}$")
@@ -30,9 +31,10 @@ def join_ladder(conn, user_id, nickname):
 
     try:
         conn.execute(
-            "INSERT INTO players (user_id, nickname) VALUES (?, ?)", (user_id, nickname)
+            "INSERT INTO players (user_id, nickname) VALUES (%s, %s)", (user_id, nickname)
         )
-    except sqlite3.IntegrityError:
+    except pymssql.IntegrityError:  # the UNIQUE rule on nickname
+        conn.rollback()
         raise LadderError("nickname is already taken")
     conn.commit()
     return get_player(conn, user_id)
@@ -40,7 +42,7 @@ def join_ladder(conn, user_id, nickname):
 
 def get_player(conn, user_id):
     row = conn.execute(
-        "SELECT user_id, nickname, rating, matches_played FROM players WHERE user_id = ?",
+        "SELECT user_id, nickname, rating, matches_played FROM players WHERE user_id = %s",
         (user_id,),
     ).fetchone()
     return dict(row) if row else None
@@ -78,19 +80,19 @@ def record_match(conn, recorded_by, team_a, team_b, winner):
     for user_id in team_b:
         _apply_result(conn, user_id, -change)
 
-    cursor = conn.execute(
+    row = conn.execute(
         "INSERT INTO matches (team_a_p1, team_a_p2, team_b_p1, team_b_p2, winner, recorded_by) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "OUTPUT INSERTED.id VALUES (%s, %s, %s, %s, %s, %s)",
         (*team_a, *team_b, winner, recorded_by),
-    )
+    ).fetchone()
     conn.commit()
-    return {"id": cursor.lastrowid, "winner": winner, "team_a_change": change, "team_b_change": -change}
+    return {"id": row["id"], "winner": winner, "team_a_change": change, "team_b_change": -change}
 
 
 def _apply_result(conn, user_id, change):
     conn.execute(
-        "UPDATE players SET rating = rating + ?, matches_played = matches_played + 1 "
-        "WHERE user_id = ?",
+        "UPDATE players SET rating = rating + %s, matches_played = matches_played + 1 "
+        "WHERE user_id = %s",
         (change, user_id),
     )
 

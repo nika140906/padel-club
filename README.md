@@ -11,47 +11,66 @@ Login lives in the bookings service. It returns a signed token, and the browser 
 
 ```
 services/
-  bookings/   app.py, padel/auth, padel/bookings, tests/, requirements.txt
-  ladder/     app.py, padel/ladder, padel/auth (token check only), tests/, requirements.txt
+  bookings/   app.py, padel/auth, padel/bookings, migrations/, tests/, Dockerfile, requirements.txt
+  ladder/     app.py, padel/ladder, padel/auth (token check only), migrations/, tests/, Dockerfile, requirements.txt
+db/init.sql           creates the two local databases and their logins
+docker-compose.yml    the whole system on one machine
 ```
 
-## Setup
+Each service keeps its data in its own SQL Server database (`bookings` or `ladder`) and logs in with its own user, which cannot open the other database.
 
-Requires Python 3.12+. Each service has its own `requirements.txt`.
+## Run with Docker Compose
+
+You need Docker Desktop. On an Apple-chip Mac, SQL Server runs through Rosetta (Settings → General → "Use Rosetta for x86_64/amd64 emulation", on by default).
+
+First make your `.env` file. It holds the passwords and is ignored by Git:
 
 ```bash
-git clone https://github.com/nika140906/padel-club.git
-cd padel-club
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r services/bookings/requirements.txt -r services/ladder/requirements.txt
+cp .env.example .env
+echo "Pw1-$(openssl rand -hex 16)"    # run three times: one password each for MSSQL_SA, BOOKINGS_DB, LADDER_DB
+openssl rand -hex 32                  # for TOKEN_SECRET
 ```
 
-## Run
-
-Both services need the same `TOKEN_SECRET`. Make a random one, then start each service in its own terminal with it:
+Paste the values into `.env`, then start everything:
 
 ```bash
-openssl rand -hex 32                      # copy the output
-export TOKEN_SECRET=<paste it here>       # in both terminals
-
-cd services/bookings && PORT=8001 python app.py
-cd services/ladder   && PORT=8002 python app.py
+docker compose up --build
 ```
 
-Never commit a real secret. Real values only live in environment variables, in a local `.env` file (ignored by Git) or in GitHub Actions secrets.
+This starts SQL Server, runs `db/init.sql` once it is ready (it creates the databases and logins, and is safe to run again), then starts the two services. Each service applies its own migrations when it starts. The bookings service is on `localhost:8001` and the ladder on `localhost:8002`. Check them with `curl localhost:8001/health` and `curl localhost:8002/health`.
 
-Each service creates its own database on first start. Check they are up with `curl localhost:8001/health` and `curl localhost:8002/health`.
+`docker compose down` stops everything and keeps the data. `docker compose down -v` also deletes the database volume, so only use it when you want to start from empty.
+
+Never commit a real secret. Real values only live in the local `.env` file (ignored by Git) or in GitHub Actions secrets.
+
+## Run one service without Docker
+
+Requires Python 3.12+ and a running SQL Server (for example `docker compose up -d db db-init`).
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r services/bookings/requirements-dev.txt -r services/ladder/requirements-dev.txt
+set -a && source .env && set +a      # load the passwords from .env into this terminal
+
+cd services/bookings
+DATABASE_URL="mssql://bookings_user:$BOOKINGS_DB_PASSWORD@localhost:1433/bookings" PORT=8001 python app.py
+```
+
+## Database migrations
+
+Each service has a `migrations/` folder with numbered SQL files (`001_init.sql`, `002_...`). On start, the service runs the files it has not run before, in order, and records each one in its `schema_migrations` table. A second start applies nothing. Each file runs in one transaction, so a failing migration changes nothing. Applied files are never edited; a fix goes in a new file.
 
 ## Configuration
 
-Both services read the same variables:
+Each service reads:
 
 | Variable       | Default | Purpose |
 |----------------|---------|---------|
 | `PORT`         | `8000`  | Port the service listens on (binds to 0.0.0.0) |
-| `DATA_DIR`     | `data`  | Folder for the service's SQLite file (`bookings.db` or `ladder.db`) |
-| `TOKEN_SECRET` | none, required | Signs and checks login tokens. Must be the same in both services. The service refuses to start without it |
+| `DATABASE_URL` | none, required, secret | The service's own database, as `mssql://user:password@host:1433/database` |
+| `TOKEN_SECRET` | none, required, secret | Signs and checks login tokens. Must be the same in both services |
+
+A service refuses to start if `DATABASE_URL` or `TOKEN_SECRET` is missing.
 
 ## API
 
@@ -92,11 +111,12 @@ There is no logout route. Tokens are not stored on the server, so a client logs 
 
 ## Tests & Coverage
 
-Each service is tested on its own, from its own folder:
+The tests run against a real SQL Server. Each run creates its own test database (`bookings_test` or `ladder_test`), wipes it and runs the migrations into it, so never point `TEST_DATABASE_URL` at a database with real data. With the compose SQL Server running (`docker compose up -d db`):
 
 ```bash
-cd services/bookings && pytest --cov=padel --cov=app
-cd services/ladder   && pytest --cov=padel --cov=app
+set -a && source .env && set +a
+cd services/bookings && TEST_DATABASE_URL="mssql://sa:$MSSQL_SA_PASSWORD@localhost:1433/bookings_test" pytest --cov=padel --cov=app
+cd services/ladder   && TEST_DATABASE_URL="mssql://sa:$MSSQL_SA_PASSWORD@localhost:1433/ladder_test"   pytest --cov=padel --cov=app
 ```
 
-Latest result: bookings 79 tests, ladder 50 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line).
+Latest result: bookings 100 tests, ladder 63 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line).
