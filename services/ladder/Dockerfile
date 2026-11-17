@@ -26,6 +26,12 @@ USER appuser
 ENV PORT=8000
 EXPOSE 8000
 
+# The Git commit this image is built from, shown by /health. The pipeline
+# passes it with --build-arg GIT_SHA=<sha>; a local build says "dev".
+# It comes last so a new commit does not throw away the cached layers above.
+ARG GIT_SHA=dev
+ENV GIT_SHA=${GIT_SHA}
+
 # gunicorn is a production web server. One worker process, so the migrations
 # in create_app() run once per container; four threads serve requests side by side.
 # --no-control-socket: we never send commands to a running gunicorn, so it needs no socket.

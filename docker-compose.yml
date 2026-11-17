@@ -42,7 +42,10 @@ services:
     restart: "no"
 
   bookings:
-    build: ./services/bookings
+    build:
+      context: ./services/bookings
+      args:
+        GIT_SHA: ${GIT_SHA:-dev} # optional: GIT_SHA=$(git rev-parse --short HEAD) docker compose up --build
     depends_on:
       db-init:
         condition: service_completed_successfully
@@ -50,11 +53,15 @@ services:
       PORT: 8000
       DATABASE_URL: mssql://bookings_user:${BOOKINGS_DB_PASSWORD:?set BOOKINGS_DB_PASSWORD in .env}@db:1433/bookings
       TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
+      CORS_ORIGIN: http://localhost:8080 # where the UI will be served
     ports:
       - "8001:8000"
 
   ladder:
-    build: ./services/ladder
+    build:
+      context: ./services/ladder
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
     depends_on:
       db-init:
         condition: service_completed_successfully
@@ -62,6 +69,11 @@ services:
       PORT: 8000
       DATABASE_URL: mssql://ladder_user:${LADDER_DB_PASSWORD:?set LADDER_DB_PASSWORD in .env}@db:1433/ladder
       TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
+      CORS_ORIGIN: http://localhost:8080
+      # The ladder finds bookings by its compose service name. No depends_on:
+      # the ladder starts and works on its own, only joining needs bookings.
+      BOOKINGS_URL: http://bookings:8000
+      BOOKINGS_TIMEOUT_S: 3
     ports:
       - "8002:8000"
 

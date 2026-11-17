@@ -1,10 +1,14 @@
+import json
 import os
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pymssql
 import pytest
 
 from app import create_app
-from padel.auth.tokens import make_token
+from padel.auth.tokens import make_token, read_token
 from padel.db import connect, parse_database_url
 from padel.migrate import migrate
 
@@ -75,10 +79,68 @@ def conn(clean_database):
     connection.close()
 
 
+class BookingsStub:
+    """A stand-in for the bookings service: a real HTTP server on a free local port.
+
+    It answers GET /auth/me the way the real bookings service does, reading
+    the user id from the token. mode decides how it behaves:
+    "ok" (200), "missing" (404), "broken" (500), "slow" (answers after 1 s)
+    or "not_json". received_auth records the Authorization headers it got.
+    """
+
+    def __init__(self):
+        self.mode = "ok"
+        self.received_auth = []
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                stub.received_auth.append(self.headers.get("Authorization"))
+                if stub.mode == "slow":
+                    time.sleep(1)
+                if self.path != "/auth/me" or stub.mode == "missing":
+                    return self.reply(404, {"error": "account not found"})
+                if stub.mode == "broken":
+                    return self.reply(500, {"error": "internal server error"})
+                if stub.mode == "not_json":
+                    return self.reply(200, "hello")
+                user_id = read_token(TEST_SECRET, self.headers["Authorization"].split(" ", 1)[1])
+                self.reply(200, {"id": user_id, "username": f"member{user_id}"})
+
+            def reply(self, status, body):
+                data = (json.dumps(body) if isinstance(body, dict) else body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):  # keep the test output quiet
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+        threading.Thread(target=self.server.serve_forever, args=(0.05,), daemon=True).start()
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
 @pytest.fixture
-def client(clean_database):
-    """A test client for an app that uses the empty test database."""
-    return create_app(database_url=clean_database, token_secret=TEST_SECRET).test_client()
+def bookings_stub():
+    stub = BookingsStub()
+    yield stub
+    stub.stop()
+
+
+@pytest.fixture
+def client(clean_database, bookings_stub):
+    """A test client for an app that uses the empty test database and the bookings stub."""
+    app = create_app(
+        database_url=clean_database, token_secret=TEST_SECRET, bookings_url=bookings_stub.url
+    )
+    return app.test_client()
 
 
 def log_in_as(client, user_id):

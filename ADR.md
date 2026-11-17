@@ -67,7 +67,7 @@ Consequences: Coverage is about 99% and each rule has a test named after it, so 
 ## 5. Do not build a web frontend; ship a JSON API only
 Date: 2026-10-03
 
-Status: Decided
+Status: Superseded by [6]
 
 Context: Club members will eventually want pages to book courts and see the leaderboard, but the assignment had one week, and the grade rests on the two backend domains, their tests and the design records. The choice was made on 2026-09-29, before the routes were written, and is recorded here now that both domains are finished.
 
@@ -76,3 +76,16 @@ Decision: The app is a JSON API only. There are no HTML pages, templates, CSS or
 Alternatives considered: Simple HTML pages with Flask templates (a login page, a booking page and a leaderboard page). They would make the app easier to demo, but they would add around 6-8 template files, form handling and more routes to test, taking time away from the booking rules, the Elo logic and their tests.
 
 Consequences: All the time went into the two domains, auth and tests (110 tests, 99% coverage), and the API is ready for any frontend or for other services to call when the app is split up later. The cost is that a real member cannot use the app without a separate frontend, which would be the next thing to build.
+
+## 6. Split into a bookings service that owns login and a ladder service, with one server-side call when a member joins
+Date: 2026-11-17
+
+Status: Decided
+
+Context: Assignment 2 allows exactly two service containers, one per domain, but ADR-2 had three modules: auth, bookings and ladder. Each service now has its own database, so ADR-3's "check user ids in code" must happen over HTTP, and at least one user-visible flow must cross the seam on the server and survive the other service being down.
+
+Decision: The seam from ADR-2 held: bookings and ladder share nothing but user ids, auth moved into the bookings service, and the ladder only checks login tokens with the shared `TOKEN_SECRET`. The one server-side crossing is `POST /ladder/join`: the ladder calls `GET /auth/me` on bookings with the member's own token (3 second timeout, `BOOKINGS_TIMEOUT_S`) to confirm the account and get the username, and answers `503` with "try again in a minute" if bookings fails; everything else, including a static UI in `ui/` calling both services from the browser (which replaces ADR-5), needs no call between services.
+
+Alternatives considered: Auth as its own service was rejected, because only two containers are allowed and every request would have to ask it who is logged in, which signed tokens avoid. Doing the join flow in the browser (fetch the username from bookings, send it to the ladder) was rejected, because the ladder would have to trust a username the browser sent. Degrading instead of failing (let the member join unchecked while bookings is down) was rejected, because the ladder would store players nobody verified, and joining happens once and is easy to retry; retrying inside the ladder was rejected too, since it makes the member wait longer for the same answer.
+
+Consequences: Only joining depends on bookings; the leaderboard, `/ladder/me` and recording matches keep working with bookings stopped. The costs: the nickname is a copy that does not follow later account changes, a cold bookings container on Azure may make the first join fail (the member has usually just logged in, so bookings is awake), and the timeout covers connecting and reading but not the name lookup, so in compose a stopped bookings takes about 4 seconds to fail.

@@ -37,5 +37,9 @@ def login():
 @bp.get("/me")
 @login_required
 def me():
+    """The logged-in member. The ladder service also calls this when a member joins."""
     user_id = current_user_id()
-    return {"id": user_id, "username": get_username(get_db(), user_id)}
+    username = get_username(get_db(), user_id)
+    if username is None:  # a valid token, but the account is gone
+        return {"error": "account not found"}, 404
+    return {"id": user_id, "username": username}

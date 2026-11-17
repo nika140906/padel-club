@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from tests.conftest import log_in_as
@@ -92,3 +94,69 @@ def test_fake_token_returns_401(client):
     client.environ_base["HTTP_AUTHORIZATION"] = "Bearer not-a-real-token"
 
     assert client.get("/ladder/leaderboard").status_code == 401
+
+
+# Joining needs the bookings service (here the stub from conftest.py).
+
+def test_join_sends_the_members_own_token_to_bookings(logged_in_client, bookings_stub):
+    logged_in_client.post("/ladder/join", json={"nickname": "nika"})
+
+    assert bookings_stub.received_auth == [logged_in_client.environ_base["HTTP_AUTHORIZATION"]]
+
+
+def test_join_without_nickname_uses_username_from_bookings(logged_in_client):
+    response = logged_in_client.post("/ladder/join", json={})
+
+    assert response.status_code == 201
+    assert response.get_json()["nickname"] == "member1"
+
+
+def test_join_when_account_is_gone_returns_404(logged_in_client, bookings_stub):
+    bookings_stub.mode = "missing"
+
+    response = logged_in_client.post("/ladder/join", json={"nickname": "nika"})
+
+    assert response.status_code == 404
+    assert logged_in_client.get("/ladder/me").status_code == 404  # nobody was added
+
+
+@pytest.mark.parametrize("mode", ["broken", "not_json"])
+def test_join_when_bookings_misbehaves_returns_503(logged_in_client, bookings_stub, mode):
+    bookings_stub.mode = mode
+
+    response = logged_in_client.post("/ladder/join", json={"nickname": "nika"})
+
+    assert response.status_code == 503
+    assert "try again" in response.get_json()["error"]
+
+
+def test_join_when_bookings_is_down_returns_503(logged_in_client, bookings_stub):
+    bookings_stub.stop()  # nothing listens on that port any more
+
+    response = logged_in_client.post("/ladder/join", json={"nickname": "nika"})
+
+    assert response.status_code == 503
+
+
+def test_join_when_bookings_is_too_slow_gives_up_after_the_timeout(logged_in_client, bookings_stub):
+    bookings_stub.mode = "slow"  # answers after 1 second
+    logged_in_client.application.config["BOOKINGS_TIMEOUT_S"] = 0.2
+
+    started = time.perf_counter()
+    response = logged_in_client.post("/ladder/join", json={"nickname": "nika"})
+
+    assert response.status_code == 503
+    assert time.perf_counter() - started < 0.9
+
+
+def test_rest_of_the_ladder_works_while_bookings_is_down(four_members, bookings_stub):
+    client, (alice, bob, carol, dan) = four_members
+    bookings_stub.stop()
+
+    assert client.get("/ladder/leaderboard").status_code == 200
+    assert client.get("/ladder/me").status_code == 200
+    response = client.post(
+        "/ladder/matches",
+        json={"team_a": [alice, bob], "team_b": [carol, dan], "winner": "A"},
+    )
+    assert response.status_code == 201

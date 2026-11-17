@@ -1,4 +1,5 @@
-from tests.conftest import use_token
+from padel.auth.tokens import make_token
+from tests.conftest import TEST_SECRET, use_token
 
 
 def register(client, username="nika", password="secret123"):
@@ -53,6 +54,17 @@ def test_login_then_me_returns_current_user(client):
 
     assert response.status_code == 200
     assert response.get_json()["username"] == "nika"
+
+
+def test_me_for_an_account_that_no_longer_exists_returns_404(client):
+    # A correctly signed token for a user id that is not in the database.
+    # The ladder service relies on this 404 when a member joins.
+    use_token(client, make_token(TEST_SECRET, 999))
+
+    response = client.get("/auth/me")
+
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "account not found"}
 
 
 def test_login_with_wrong_password_returns_401(client):
