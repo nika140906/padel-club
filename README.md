@@ -9,6 +9,8 @@ A small backend for a padel club of a few hundred members. In Assignment 1 it wa
 
 Login lives in the bookings service. It returns a signed token, and the browser sends it to both services in the `Authorization: Bearer <token>` header. Both services check the token with the same `TOKEN_SECRET`, so the ladder knows who is logged in without calling bookings.
 
+One request crosses between the services. When a member joins the ladder, the ladder calls `GET /auth/me` on bookings with the member's own token, to check the account exists and to get the username (used as the nickname if none is given). The ladder finds bookings through `BOOKINGS_URL` and waits at most `BOOKINGS_TIMEOUT_S` seconds. If bookings is down or too slow, joining returns `503` with a message to try again, and everything else in the ladder keeps working. See ADR-6.
+
 ```
 services/
   bookings/   app.py, padel/auth, padel/bookings, migrations/, tests/, Dockerfile, requirements.txt
@@ -69,6 +71,15 @@ Each service reads:
 | `PORT`         | `8000`  | Port the service listens on (binds to 0.0.0.0) |
 | `DATABASE_URL` | none, required, secret | The service's own database, as `mssql://user:password@host:1433/database` |
 | `TOKEN_SECRET` | none, required, secret | Signs and checks login tokens. Must be the same in both services |
+| `CORS_ORIGIN`  | `http://localhost:8080` | The UI's origin, the only website allowed to call the service from a browser |
+| `GIT_SHA`      | `dev` | The commit the image was built from, shown by `/health`. Set at build time with `--build-arg GIT_SHA=<sha>` |
+
+The ladder service also reads:
+
+| Variable             | Default | Purpose |
+|----------------------|---------|---------|
+| `BOOKINGS_URL`       | `http://bookings:8000` | Base URL of the bookings service |
+| `BOOKINGS_TIMEOUT_S` | `3` | Seconds to wait for bookings before joining fails with `503` |
 
 A service refuses to start if `DATABASE_URL` or `TOKEN_SECRET` is missing.
 
@@ -78,21 +89,21 @@ All requests and responses are JSON. Every route except `/health`, `/auth/regist
 
 | Method | Path | Body | What it does |
 |--------|------|------|--------------|
-| GET    | `/health` | | Health check |
+| GET    | `/health` | | `200 {"status": "ok", "db": "ok", "version": "<git sha>"}` if the service can read and write its own database, otherwise `503` with `"error"` |
 | POST   | `/auth/register` | `{"username", "password"}` | Create an account |
 | POST   | `/auth/login` | `{"username", "password"}` | Log in, returns `{"id", "username", "token"}` |
-| GET    | `/auth/me` | | The logged-in user |
+| GET    | `/auth/me` | | The logged-in user, or `404` if the account no longer exists. The ladder also calls this |
 | GET    | `/courts` | | List courts |
 | GET    | `/courts/<id>/bookings?day=YYYY-MM-DD` | | A court's bookings for one day |
 | POST   | `/bookings` | `{"court_id", "start_time": "YYYY-MM-DD HH:MM", "duration_minutes": 60 or 90}` | Book a court |
 | GET    | `/bookings/mine` | | My bookings |
 | DELETE | `/bookings/<id>` | | Cancel my booking |
-| POST   | `/ladder/join` | `{"nickname"}` | Join the ladder |
+| POST   | `/ladder/join` | `{"nickname"}` (optional) | Join the ladder. Calls bookings; `503` if bookings does not answer |
 | GET    | `/ladder/me` | | My rating and matches played |
 | POST   | `/ladder/matches` | `{"team_a": [id, id], "team_b": [id, id], "winner": "A" or "B"}` | Record a match I played in |
 | GET    | `/ladder/leaderboard` | | Everyone, ranked by rating |
 
-Errors come back as `{"error": "..."}` with `400` (broken rule), `401` (not logged in or wrong password), `404` (not found) or `409` (court already booked).
+Errors come back as `{"error": "..."}` with `400` (broken rule), `401` (not logged in or wrong password), `404` (not found), `409` (court already booked) or `503` (joining the ladder while bookings is not answering).
 
 ### Example with curl
 
@@ -109,6 +120,14 @@ curl -X POST localhost:8002/ladder/join -H "Authorization: Bearer $TOKEN" -H "Co
 
 There is no logout route. Tokens are not stored on the server, so a client logs out by forgetting its token. Tokens expire after 12 hours.
 
+## Health, logs and partial failure
+
+`GET /health` on each service opens its own database, reads a row and writes one that is rolled back straight away. It answers `200` if that works and `503` if not, within about 5 seconds. It never calls the other service, so the ladder stays healthy while bookings is down.
+
+Each service writes one log line per request to stdout, for example `INFO padel.requests POST /ladder/join 201 50ms`. See them with `docker compose logs -f ladder`.
+
+To see a partial failure, stop one service with `docker compose stop bookings`. The ladder keeps serving the leaderboard, `/ladder/me` and new matches; only `POST /ladder/join` answers `503` with a message to try again. `docker compose start bookings` brings it back.
+
 ## Tests & Coverage
 
 The tests run against a real SQL Server. Each run creates its own test database (`bookings_test` or `ladder_test`), wipes it and runs the migrations into it, so never point `TEST_DATABASE_URL` at a database with real data. With the compose SQL Server running (`docker compose up -d db`):
@@ -119,4 +138,6 @@ cd services/bookings && TEST_DATABASE_URL="mssql://sa:$MSSQL_SA_PASSWORD@localho
 cd services/ladder   && TEST_DATABASE_URL="mssql://sa:$MSSQL_SA_PASSWORD@localhost:1433/ladder_test"   pytest --cov=padel --cov=app
 ```
 
-Latest result: bookings 100 tests, ladder 63 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line).
+The ladder's tests replace the bookings service with a small fake HTTP server (`BookingsStub` in `services/ladder/tests/conftest.py`). It can answer normally, answer 404 or 500, answer too slowly, or be switched off, so the tests cover every way the call to bookings can fail.
+
+Latest result: bookings 109 tests, ladder 79 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line).
