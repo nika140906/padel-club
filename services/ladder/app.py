@@ -6,6 +6,7 @@ from flask import Flask
 from padel.db import close_db, connect
 from padel.ladder.routes import bp as ladder_bp
 from padel.migrate import migrate
+from padel.web import setup_cors, setup_health, setup_request_logs
 
 # All configuration comes from environment variables.
 PORT = int(os.environ.get("PORT", "8000"))
@@ -14,7 +15,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 
-def create_app(database_url=None, token_secret=None):
+def create_app(database_url=None, token_secret=None, bookings_url=None):
     # Signs the login tokens. It has no default: both services must use the
     # same value, and a random one would make every token invalid in the ladder.
     token_secret = token_secret or os.environ.get("TOKEN_SECRET")
@@ -28,6 +29,14 @@ def create_app(database_url=None, token_secret=None):
     app = Flask(__name__)
     app.config["TOKEN_SECRET"] = token_secret
     app.config["DATABASE_URL"] = database_url
+    # Where the bookings service is. The ladder calls it when a member joins.
+    app.config["BOOKINGS_URL"] = bookings_url or os.environ.get("BOOKINGS_URL", "http://bookings:8000")
+    # Seconds to wait for the bookings service before giving up with a 503.
+    app.config["BOOKINGS_TIMEOUT_S"] = float(os.environ.get("BOOKINGS_TIMEOUT_S", "3"))
+    # The only origin whose pages may call this service from a browser (the UI).
+    app.config["CORS_ORIGIN"] = os.environ.get("CORS_ORIGIN", "http://localhost:8080")
+    # The Git commit this image was built from, shown by /health.
+    app.config["VERSION"] = os.environ.get("GIT_SHA", "dev")
 
     # Bring the database schema up to date before serving any request.
     conn = connect(database_url)
@@ -38,10 +47,9 @@ def create_app(database_url=None, token_secret=None):
 
     app.teardown_appcontext(close_db)
     app.register_blueprint(ladder_bp)
-
-    @app.get("/health")
-    def health():
-        return {"status": "ok"}
+    setup_health(app)
+    setup_cors(app)
+    setup_request_logs(app)
 
     return app
 

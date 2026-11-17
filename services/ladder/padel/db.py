@@ -48,9 +48,15 @@ class Connection:
         self.raw.close()
 
 
-def connect(database_url):
-    # Every statement runs inside a transaction until commit() is called.
-    return Connection(pymssql.connect(**parse_database_url(database_url), autocommit=False))
+def connect(database_url, **options):
+    """Open a connection. Every statement runs inside a transaction until commit().
+
+    options go straight to pymssql, e.g. login_timeout=5 (seconds to wait
+    for the server) or timeout=5 (seconds a query may take).
+    """
+    return Connection(
+        pymssql.connect(**parse_database_url(database_url), autocommit=False, **options)
+    )
 
 
 def get_db():

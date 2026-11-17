@@ -7,6 +7,7 @@ from padel.auth.routes import bp as auth_bp
 from padel.bookings.routes import bp as bookings_bp
 from padel.db import close_db, connect
 from padel.migrate import migrate
+from padel.web import setup_cors, setup_health, setup_request_logs
 
 # All configuration comes from environment variables.
 PORT = int(os.environ.get("PORT", "8000"))
@@ -29,6 +30,10 @@ def create_app(database_url=None, token_secret=None):
     app = Flask(__name__)
     app.config["TOKEN_SECRET"] = token_secret
     app.config["DATABASE_URL"] = database_url
+    # The only origin whose pages may call this service from a browser (the UI).
+    app.config["CORS_ORIGIN"] = os.environ.get("CORS_ORIGIN", "http://localhost:8080")
+    # The Git commit this image was built from, shown by /health.
+    app.config["VERSION"] = os.environ.get("GIT_SHA", "dev")
 
     # Bring the database schema up to date before serving any request.
     conn = connect(database_url)
@@ -40,10 +45,9 @@ def create_app(database_url=None, token_secret=None):
     app.teardown_appcontext(close_db)
     app.register_blueprint(auth_bp)
     app.register_blueprint(bookings_bp)
-
-    @app.get("/health")
-    def health():
-        return {"status": "ok"}
+    setup_health(app)
+    setup_cors(app)
+    setup_request_logs(app)
 
     return app
 

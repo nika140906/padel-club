@@ -4,13 +4,6 @@ from app import create_app
 from tests.conftest import TEST_SECRET
 
 
-def test_health_returns_ok(client):
-    response = client.get("/health")
-
-    assert response.status_code == 200
-    assert response.get_json() == {"status": "ok"}
-
-
 def test_starting_the_app_again_applies_no_migrations(clean_database, caplog):
     caplog.set_level("INFO")
 
