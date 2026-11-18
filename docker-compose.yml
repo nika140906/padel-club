@@ -77,5 +77,16 @@ services:
     ports:
       - "8002:8000"
 
+  # The static UI. A stock nginx image serves the ui/ folder as it is (no
+  # Dockerfile, no build), so it is not one of the two service containers.
+  # The page runs in the browser and calls bookings on :8001 and the ladder
+  # on :8002 itself; config.js says where they are.
+  ui:
+    image: nginx:1.30.0-alpine
+    volumes:
+      - ./ui:/usr/share/nginx/html:ro # read-only: nginx only serves the files
+    ports:
+      - "8080:80"
+
 volumes:
   db-data:

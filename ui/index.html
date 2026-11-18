@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Padel Club</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- config.js says where the two services are. Locally it points at
+       localhost; the deploy pipeline writes a new one with the Azure URLs. -->
+  <script src="config.js"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>Padel Club</h1>
+    <div id="who" hidden>
+      Logged in as <strong id="who-name"></strong>
+      <button id="logout" type="button" class="quiet">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Shown while nobody is logged in. Login lives in the bookings service. -->
+    <section id="login-panel" class="card narrow">
+      <h2>Log in or register</h2>
+      <form id="login-form">
+        <label>Username <input id="username" autocomplete="username" required></label>
+        <label>Password <input id="password" type="password" autocomplete="current-password" required minlength="8"></label>
+        <div class="row">
+          <button type="submit">Log in</button>
+          <button type="button" id="register" class="quiet">Register</button>
+        </div>
+      </form>
+      <p class="message" id="login-message"></p>
+    </section>
+
+    <!-- Shown once logged in: one column per service. -->
+    <div id="app" class="columns" hidden>
+      <section class="card" id="bookings-panel">
+        <h2>Court bookings <span class="svc">bookings service</span></h2>
+        <p class="message" id="bookings-message"></p>
+
+        <form id="book-form" class="grid">
+          <label>Court <select id="court"></select></label>
+          <label>Day <input id="day" type="date" required></label>
+          <label>Start <select id="start"></select></label>
+          <label>Length
+            <select id="duration">
+              <option value="60">60 min</option>
+              <option value="90">90 min</option>
+            </select>
+          </label>
+          <button type="submit">Book</button>
+        </form>
+
+        <h3>Schedule for this court and day</h3>
+        <ul id="schedule" class="list"></ul>
+
+        <h3>My bookings</h3>
+        <ul id="my-bookings" class="list"></ul>
+      </section>
+
+      <section class="card" id="ladder-panel">
+        <h2>Match ladder <span class="svc">ladder service</span></h2>
+        <p class="message" id="ladder-message"></p>
+
+        <div id="me"></div>
+        <form id="join-form" class="row" hidden>
+          <input id="nickname" placeholder="Nickname (optional)" maxlength="20">
+          <button type="submit">Join the ladder</button>
+        </form>
+
+        <form id="match-form" class="grid" hidden>
+          <label>Team A <select id="a1"></select></label>
+          <label>&nbsp;<select id="a2"></select></label>
+          <label>Team B <select id="b1"></select></label>
+          <label>&nbsp;<select id="b2"></select></label>
+          <label>Winner
+            <select id="winner">
+              <option value="A">Team A</option>
+              <option value="B">Team B</option>
+            </select>
+          </label>
+          <button type="submit">Record match</button>
+        </form>
+
+        <h3>Leaderboard</h3>
+        <table>
+          <thead><tr><th>#</th><th>Player</th><th>Rating</th><th>Played</th></tr></thead>
+          <tbody id="leaderboard"></tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
