@@ -1,0 +1,199 @@
+openapi: 3.0.3
+info:
+  title: Padel Club ladder service
+  version: "2.0"
+  description: |
+    The doubles match ladder: join under a nickname, record matches, and see
+    the leaderboard ranked by Elo rating (everyone starts at 1000).
+    Login tokens come from the bookings service; send them as
+    "Authorization: Bearer <token>". This service checks them itself with the
+    shared TOKEN_SECRET. Only POST /ladder/join calls the bookings service
+    (GET /auth/me in its openapi.yaml).
+    tests/test_openapi.py checks that this file lists exactly the routes in the code.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health of this service and its own database
+      description: Reads and writes this service's database (the write is rolled back). Never calls the bookings service, so it stays 200 while bookings is down.
+      security: []
+      responses:
+        "200":
+          description: The database can be read and written
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+              example: { status: ok, db: ok, version: 538caa6 }
+        "503":
+          description: The database cannot be reached or used
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+              example: { status: error, db: error, version: 538caa6 }
+
+  /ladder/join:
+    post:
+      summary: Join the ladder
+      description: |
+        Calls GET /auth/me on the bookings service with the caller's own token
+        (timeout BOOKINGS_TIMEOUT_S, default 3 s) to confirm the account and get
+        the username. Without a nickname, the username is used. Joining twice
+        returns the existing player.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nickname: { type: string, pattern: "^[A-Za-z0-9_]{2,20}$" }
+      responses:
+        "201":
+          description: On the ladder
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Player" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Bookings says the member's account no longer exists
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: The bookings service did not answer in time, could not be reached, or answered with an error. Nothing was saved; try again.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "the bookings service is not responding, so you cannot join the ladder right now; please try again in a minute" }
+
+  /ladder/me:
+    get:
+      summary: My place on the ladder
+      responses:
+        "200":
+          description: My player
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Player" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: I have not joined the ladder
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /ladder/matches:
+    post:
+      summary: Record a doubles match I played in
+      description: All four players must be on the ladder and different, and I must be one of them. Winners gain what losers lose.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewMatch" }
+      responses:
+        "201":
+          description: Saved, ratings updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MatchResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /ladder/leaderboard:
+    get:
+      summary: Everyone on the ladder, best rating first
+      responses:
+        "200":
+          description: Ranked from 1; ties go to whoever played more matches
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [leaderboard]
+                properties:
+                  leaderboard:
+                    type: array
+                    items: { $ref: "#/components/schemas/RankedPlayer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The token from POST /auth/login on the bookings service
+
+  responses:
+    BadRequest:
+      description: The request breaks a ladder rule
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: No token, or the token is fake or older than 12 hours
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: login required }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Health:
+      type: object
+      required: [status, db, version]
+      properties:
+        status: { type: string, enum: [ok, error] }
+        db: { type: string, enum: [ok, error] }
+        version: { type: string, description: "The Git commit the image was built from, or dev" }
+
+    Player:
+      type: object
+      required: [user_id, nickname, rating, matches_played]
+      properties:
+        user_id: { type: integer, description: The member's id in the bookings service }
+        nickname: { type: string }
+        rating: { type: integer, example: 1000 }
+        matches_played: { type: integer }
+
+    RankedPlayer:
+      allOf:
+        - $ref: "#/components/schemas/Player"
+        - type: object
+          required: [rank]
+          properties:
+            rank: { type: integer, minimum: 1 }
+
+    NewMatch:
+      type: object
+      required: [team_a, team_b, winner]
+      properties:
+        team_a:
+          type: array
+          items: { type: integer }
+          minItems: 2
+          maxItems: 2
+        team_b:
+          type: array
+          items: { type: integer }
+          minItems: 2
+          maxItems: 2
+        winner: { type: string, enum: [A, B] }
+
+    MatchResult:
+      type: object
+      required: [id, winner, team_a_change, team_b_change]
+      properties:
+        id: { type: integer }
+        winner: { type: string, enum: [A, B] }
+        team_a_change: { type: integer, description: Rating points each team A player gained (negative if lost) }
+        team_b_change: { type: integer }
