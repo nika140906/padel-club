@@ -13,8 +13,9 @@ One request crosses between the services. When a member joins the ladder, the la
 
 ```
 services/
-  bookings/   app.py, padel/auth, padel/bookings, migrations/, tests/, Dockerfile, requirements.txt
-  ladder/     app.py, padel/ladder, padel/auth (token check only), migrations/, tests/, Dockerfile, requirements.txt
+  bookings/   app.py, padel/auth, padel/bookings, migrations/, tests/, openapi.yaml, Dockerfile, requirements.txt
+  ladder/     app.py, padel/ladder, padel/auth (token check only), migrations/, tests/, openapi.yaml, Dockerfile, requirements.txt
+ui/                   the static web page: index.html, app.js, style.css, config.js
 db/init.sql           creates the two local databases and their logins
 docker-compose.yml    the whole system on one machine
 ```
@@ -39,7 +40,7 @@ Paste the values into `.env`, then start everything:
 docker compose up --build
 ```
 
-This starts SQL Server, runs `db/init.sql` once it is ready (it creates the databases and logins, and is safe to run again), then starts the two services. Each service applies its own migrations when it starts. The bookings service is on `localhost:8001` and the ladder on `localhost:8002`. Check them with `curl localhost:8001/health` and `curl localhost:8002/health`.
+This starts SQL Server, runs `db/init.sql` once it is ready (it creates the databases and logins, and is safe to run again), then starts the two services. Each service applies its own migrations when it starts. Open the UI at <http://localhost:8080>. The bookings service is on `localhost:8001` and the ladder on `localhost:8002`; check them with `curl localhost:8001/health` and `curl localhost:8002/health`.
 
 `docker compose down` stops everything and keeps the data. `docker compose down -v` also deletes the database volume, so only use it when you want to start from empty.
 
@@ -83,7 +84,17 @@ The ladder service also reads:
 
 A service refuses to start if `DATABASE_URL` or `TOKEN_SECRET` is missing.
 
+## The UI
+
+`ui/` is a plain HTML, CSS and JavaScript page with no framework and no build step. Compose serves the folder as it is with the stock `nginx:1.30.0-alpine` image on port 8080, so the UI is not one of the two service containers. The page runs in the browser and calls both services itself: bookings for login, courts and bookings, the ladder for everything under `/ladder`. Each service accepts browser calls only from `CORS_ORIGIN`, which is `http://localhost:8080` locally.
+
+The page reads the two service URLs from `ui/config.js`. The committed file points at `localhost:8001` and `localhost:8002`; the deploy pipeline writes a new `config.js` with the Azure URLs, so no URL is written into `app.js`. The login token is kept in the browser's `sessionStorage`, so closing the tab logs you out.
+
+If one service is down, only its half of the page shows "not reachable right now"; the other half keeps working. Every call from the page gives up after 10 seconds.
+
 ## API
+
+Each service describes its API in `openapi.yaml` (OpenAPI 3.0): `services/bookings/openapi.yaml` and `services/ladder/openapi.yaml`. A test in each service fails if the document and the real routes ever differ.
 
 All requests and responses are JSON. Every route except `/health`, `/auth/register` and `/auth/login` needs a valid token in the `Authorization: Bearer <token>` header, otherwise it returns `401`. Routes under `/auth`, `/courts` and `/bookings` are on the bookings service; routes under `/ladder` are on the ladder service.
 
@@ -140,4 +151,4 @@ cd services/ladder   && TEST_DATABASE_URL="mssql://sa:$MSSQL_SA_PASSWORD@localho
 
 The ladder's tests replace the bookings service with a small fake HTTP server (`BookingsStub` in `services/ladder/tests/conftest.py`). It can answer normally, answer 404 or 500, answer too slowly, or be switched off, so the tests cover every way the call to bookings can fail.
 
-Latest result: bookings 109 tests, ladder 79 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line).
+Latest result: bookings 111 tests, ladder 82 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line).
