@@ -18,6 +18,8 @@ services/
 ui/                   the static web page: index.html, app.js, style.css, config.js
 db/init.sql           creates the two local databases and their logins
 docker-compose.yml    the whole system on one machine
+.github/workflows/    ci.yml: the checks every push and pull request must pass
+ruff.toml             lint settings for both services
 ```
 
 Each service keeps its data in its own SQL Server database (`bookings` or `ladder`) and logs in with its own user, which cannot open the other database.
@@ -151,4 +153,25 @@ cd services/ladder   && TEST_DATABASE_URL="mssql://sa:$MSSQL_SA_PASSWORD@localho
 
 The ladder's tests replace the bookings service with a small fake HTTP server (`BookingsStub` in `services/ladder/tests/conftest.py`). It can answer normally, answer 404 or 500, answer too slowly, or be switched off, so the tests cover every way the call to bookings can fail.
 
-Latest result: bookings 111 tests, ladder 82 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line).
+Latest result: bookings 111 tests, ladder 82 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line). The business rules alone (each domain's `service.py`) are at 100%.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to a branch and on every pull request. Each job is a separate check, and the run fails if any of them fails:
+
+| Job | What it checks |
+|---|---|
+| Lint | `ruff check services`, with the settings in `ruff.toml` |
+| Tests (bookings), Tests (ladder) | Each service's tests against its own SQL Server container, started fresh for the run. Fails below 70% coverage for the whole service, and again below 70% for its business rules (`padel/*/service.py`) alone |
+| Validate API files | Both `openapi.yaml` files against the OpenAPI specification |
+| Build image (bookings), Build image (ladder) | Each Dockerfile builds; the image is not pushed |
+| Scan for secrets | gitleaks over every new commit in the push or pull request, not only the last one, so a secret removed in a later commit is still caught. Before pushing, `gitleaks git .` checks the whole history locally |
+
+CI never connects to Azure. The test SQL Server gets a new random password on every run, hidden in the logs, so no password is written in the workflow. Checking `system.yaml` against `system.schema.json` will be added once the course publishes the schema.
+
+Run the same lint and coverage checks locally (with the test database from above):
+
+```bash
+pip install ruff==0.17.3 && ruff check services
+cd services/bookings && pytest --cov=padel --cov=app --cov-fail-under=70 && coverage report --include="padel/*/service.py" --fail-under=70
+```

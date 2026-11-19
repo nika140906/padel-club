@@ -1,0 +1,10 @@
+# Lint settings for both services. CI runs:  ruff check services
+# Ruff's default rules are used as they are; only these two settings change.
+
+# The code already uses lines of up to 100 characters.
+line-length = 100
+
+[lint.isort]
+# Our own modules, so their imports are sorted after the installed packages.
+# Each service has app.py, padel/ and tests/ at its top level.
+known-first-party = ["app", "padel", "tests"]
