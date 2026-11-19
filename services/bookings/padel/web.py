@@ -64,7 +64,8 @@ def database_is_ok(database_url):
         conn.execute("INSERT INTO schema_migrations (version) VALUES (%s)", ("health-check",))
         conn.rollback()
         return True
-    except Exception as error:  # any failure means "not healthy", never a crash
+    # Any failure at all means "not healthy": /health must answer 503, never crash.
+    except Exception as error:  # noqa: BLE001 (catching everything is the point here)
         log.warning("health check: database is not ok: %s", error)
         return False
     finally:
