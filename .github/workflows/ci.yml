@@ -86,19 +86,20 @@ jobs:
         run: coverage report --include="padel/*/service.py" --fail-under=70
 
   api-specs:
-    name: Validate API files
+    name: Validate API and system files
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install openapi-spec-validator==0.9.0
+      - run: pip install openapi-spec-validator==0.9.0 check-jsonschema==0.39.0
       # Checks each file against the OpenAPI 3.0 specification. The tests
       # (test_openapi.py) separately check that the files match the real routes.
       - run: openapi-spec-validator services/bookings/openapi.yaml services/ladder/openapi.yaml
-      # To do: validate system.yaml against system.schema.json (brief §5 and §8a)
-      # once the course publishes the schema.
+      # Checks system.yaml against the course's schema. The tests
+      # (test_system_yaml.py) separately check that it matches the code.
+      - run: check-jsonschema --schemafile system.schema.json system.yaml
 
   build:
     name: Build image (${{ matrix.service }})

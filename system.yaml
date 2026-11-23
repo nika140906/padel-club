@@ -1,0 +1,89 @@
+# The whole system in one file: the UI, the two services, how each one is
+# configured, what it calls, and where it runs on Azure.
+# CI checks it against system.schema.json (given by the course), and each
+# service's tests (test_system_yaml.py) check it still matches the code.
+
+student: nchachia.ieu2024
+prefix: nchachia-ieu2024
+public_url: https://nchachiaieu2024ui.z1.web.core.windows.net
+
+ui:
+  path: ui/
+  storage_account: nchachiaieu2024ui
+  calls: [bookings, ladder] # straight from the browser; the URLs are in ui/config.js
+
+azure:
+  resource_group: rg-nchachia-ieu2024
+  container_apps_environment: nchachia-ieu2024-env
+  sql_server: nchachia-ieu2024-sql2 # not -sql: see "Azure setup" step 4 in the README
+  registry: ghcr.io/nika140906
+
+services:
+  bookings:
+    description: Members, login (it issues the tokens), courts and court bookings.
+    path: services/bookings
+    openapi: services/bookings/openapi.yaml
+    port_default: 8000
+    health: /health
+    migrations: services/bookings/migrations
+    env:
+      PORT:
+        description: Port the web server listens on.
+        default: 8000
+      DATABASE_URL:
+        description: "Connection to this service's own database: mssql://<user>:<password>@<host>:<port>/<database>."
+        secret: true
+      TOKEN_SECRET:
+        description: Signs and checks login tokens. Both services get the same value.
+        secret: true
+      CORS_ORIGIN:
+        description: The UI's origin, the only one the browser may call this service from.
+        default: http://localhost:8080
+      GIT_SHA:
+        description: The commit the image was built from, shown by /health.
+        default: dev
+    azure:
+      container_app: nchachia-ieu2024-bookings
+      sql_database: nchachia-ieu2024-bookings-db
+
+  ladder:
+    description: The match ladder. Players join, record doubles matches and are ranked by Elo rating.
+    path: services/ladder
+    openapi: services/ladder/openapi.yaml
+    port_default: 8000
+    health: /health
+    migrations: services/ladder/migrations
+    env:
+      PORT:
+        description: Port the web server listens on.
+        default: 8000
+      DATABASE_URL:
+        description: "Connection to this service's own database: mssql://<user>:<password>@<host>:<port>/<database>."
+        secret: true
+      TOKEN_SECRET:
+        description: Checks the login tokens made by bookings. Same value as in bookings.
+        secret: true
+      CORS_ORIGIN:
+        description: The UI's origin, the only one the browser may call this service from.
+        default: http://localhost:8080
+      GIT_SHA:
+        description: The commit the image was built from, shown by /health.
+        default: dev
+      BOOKINGS_URL:
+        description: Base URL of the bookings service.
+        default: http://bookings:8000
+      BOOKINGS_TIMEOUT_S:
+        description: Seconds to wait for bookings before giving up.
+        default: 3
+    calls:
+      - service: bookings
+        url_env: BOOKINGS_URL
+        endpoints: ["GET /auth/me"] # when a member joins: does the account exist, and what is its username
+        timeout_s: 3
+        on_failure: >-
+          Joining the ladder answers 503 with "the bookings service is not responding,
+          so you cannot join the ladder right now; please try again in a minute".
+          Everything else in the ladder keeps working, because no other route calls bookings.
+    azure:
+      container_app: nchachia-ieu2024-ladder
+      sql_database: nchachia-ieu2024-ladder-db
