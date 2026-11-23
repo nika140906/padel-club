@@ -153,7 +153,7 @@ cd services/ladder   && TEST_DATABASE_URL="mssql://sa:$MSSQL_SA_PASSWORD@localho
 
 The ladder's tests replace the bookings service with a small fake HTTP server (`BookingsStub` in `services/ladder/tests/conftest.py`). It can answer normally, answer 404 or 500, answer too slowly, or be switched off, so the tests cover every way the call to bookings can fail.
 
-Latest result: bookings 111 tests, ladder 82 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line). The business rules alone (each domain's `service.py`) are at 100%.
+Latest result: bookings 115 tests, ladder 87 tests, both at 99% coverage (the only line missed in each is the `python app.py` start-up line). The business rules alone (each domain's `service.py`) are at 100%.
 
 ## Continuous integration
 
@@ -174,4 +174,122 @@ Run the same lint and coverage checks locally (with the test database from above
 ```bash
 pip install ruff==0.17.3 && ruff check services
 cd services/bookings && pytest --cov=padel --cov=app --cov-fail-under=70 && coverage report --include="padel/*/service.py" --fail-under=70
+```
+
+## System description
+
+`system.yaml` describes the whole system in one file: the UI, both services, every environment variable each one reads, the ladder's call to bookings, and the Azure name of every resource. CI checks it against `system.schema.json`, the schema given by the course. Each service's `tests/test_system_yaml.py` checks that it still matches the code: the same environment variables with the same defaults, paths that exist, and a call to bookings that matches bookings' `openapi.yaml`.
+
+## Azure setup (done once)
+
+The system runs in my own Azure for Students subscription. It has no credit card, so it can never be charged: when the credit runs out, the resources stop. These are the commands I ran to set it up, in order. After this, only the deploy pipeline changes anything. No password appears here: they were made with `openssl` into `.env.azure` (ignored by Git) and piped straight into GitHub secrets.
+
+**1. Subscription and region.** The subscription only allows five regions, so I listed them first:
+
+```bash
+az login                                   # picked "Azure for Students"
+az account set --subscription "Azure for Students"
+az policy assignment list --query "[].{name:displayName, params:parameters}" -o json
+# allowed: belgiumcentral, switzerlandnorth, polandcentral, austriaeast, spaincentral
+```
+
+Everything except the UI storage is in **Poland Central**. Switzerland North refused new SQL servers for this subscription ("RegionDoesNotAllowProvisioning"), and of the other four regions only Poland Central offers the free SQL database. The services are in the same region as their databases, so each query stays inside one data centre. I checked both with:
+
+```bash
+sub=$(az account show --query id -o tsv)
+az rest --method get --url "https://management.azure.com/subscriptions/$sub/providers/Microsoft.Sql/locations/polandcentral/capabilities?api-version=2023-08-01" --query "{status:status, reason:reason}"
+```
+
+**2. Providers and resource group.**
+
+```bash
+for ns in Microsoft.App Microsoft.OperationalInsights Microsoft.Sql Microsoft.Storage Microsoft.ManagedIdentity; do az provider register --namespace $ns; done
+az group create --name rg-nchachia-ieu2024 --location switzerlandnorth -o table
+```
+
+**3. The UI: a Storage static website.** Its address, https://nchachiaieu2024ui.z1.web.core.windows.net, is the system's public URL and the only origin the services accept (`CORS_ORIGIN`).
+
+```bash
+az storage account create --name nchachiaieu2024ui --resource-group rg-nchachia-ieu2024 --location switzerlandnorth --sku Standard_LRS --kind StorageV2 --allow-blob-public-access false -o table
+az storage account update --name nchachiaieu2024ui --resource-group rg-nchachia-ieu2024 --min-tls-version TLS1_2 -o none
+az storage blob service-properties update --account-name nchachiaieu2024ui --static-website --index-document index.html
+az storage account show --name nchachiaieu2024ui --resource-group rg-nchachia-ieu2024 --query primaryEndpoints.web -o tsv
+```
+
+**4. SQL server and the two serverless databases.** One server, one database per service, both serverless on the free offer: $0, and if the free monthly amount ran out they would pause instead of charging (`AutoPause`). The firewall rule `0.0.0.0` means "allow Azure services", so the Container Apps can connect.
+
+The server is called `nchachia-ieu2024-sql2`, not `nchachia-ieu2024-sql`. My first attempt was in Switzerland North and was refused, but Azure kept a hidden record of it. For over 25 minutes every new try said the name "already exists in location switzerlandnorth", although no such server existed. So I gave it a new name, which still starts with the prefix.
+
+```bash
+set -a; source .env.azure; set +a          # loads the passwords without printing them
+az sql server create --name nchachia-ieu2024-sql2 --resource-group rg-nchachia-ieu2024 --location polandcentral --admin-user padeladmin --admin-password "$AZURE_SQL_ADMIN_PASSWORD" --minimal-tls-version 1.2 -o table
+az sql server firewall-rule create --resource-group rg-nchachia-ieu2024 --server nchachia-ieu2024-sql2 --name AllowAzureServices --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 -o table
+az sql db create --resource-group rg-nchachia-ieu2024 --server nchachia-ieu2024-sql2 --name nchachia-ieu2024-bookings-db --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 --backup-storage-redundancy Local --use-free-limit true --free-limit-exhaustion-behavior AutoPause -o table
+az sql db create --resource-group rg-nchachia-ieu2024 --server nchachia-ieu2024-sql2 --name nchachia-ieu2024-ladder-db --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 --backup-storage-redundancy Local --use-free-limit true --free-limit-exhaustion-behavior AutoPause -o table
+az sql db list --resource-group rg-nchachia-ieu2024 --server nchachia-ieu2024-sql2 --query "[?name!='master'].{name:name, free:useFreeLimit, whenUsedUp:freeLimitExhaustionBehavior}" -o table
+```
+
+Then one contained user per database, which exists only inside its own database and can run the migrations (`db_ddladmin`, `db_datareader`, `db_datawriter`). `sqlcmd` runs from the SQL Server Docker image. The firewall is opened to my own address only for this and closed again afterwards; a new rule can take up to five minutes to apply, and connections before that are refused.
+
+```bash
+my_ip=$(curl -s https://api.ipify.org)
+az sql server firewall-rule create --resource-group rg-nchachia-ieu2024 --server nchachia-ieu2024-sql2 --name setup-from-my-mac --start-ip-address "$my_ip" --end-ip-address "$my_ip" -o none
+# wait about five minutes
+docker run --rm --platform linux/amd64 -e SQLCMDPASSWORD="$AZURE_SQL_ADMIN_PASSWORD" mcr.microsoft.com/mssql/server:2022-latest /opt/mssql-tools18/bin/sqlcmd -S tcp:nchachia-ieu2024-sql2.database.windows.net,1433 -U padeladmin -d nchachia-ieu2024-bookings-db -N -b -Q "CREATE USER bookings_user WITH PASSWORD = '$AZURE_BOOKINGS_DB_PASSWORD'; ALTER ROLE db_ddladmin ADD MEMBER bookings_user; ALTER ROLE db_datareader ADD MEMBER bookings_user; ALTER ROLE db_datawriter ADD MEMBER bookings_user;"
+docker run --rm --platform linux/amd64 -e SQLCMDPASSWORD="$AZURE_SQL_ADMIN_PASSWORD" mcr.microsoft.com/mssql/server:2022-latest /opt/mssql-tools18/bin/sqlcmd -S tcp:nchachia-ieu2024-sql2.database.windows.net,1433 -U padeladmin -d nchachia-ieu2024-ladder-db -N -b -Q "CREATE USER ladder_user WITH PASSWORD = '$AZURE_LADDER_DB_PASSWORD'; ALTER ROLE db_ddladmin ADD MEMBER ladder_user; ALTER ROLE db_datareader ADD MEMBER ladder_user; ALTER ROLE db_datawriter ADD MEMBER ladder_user;"
+
+# Check: each user gets into its own database, and is refused by the other one ("Login failed").
+docker run --rm --platform linux/amd64 -e SQLCMDPASSWORD="$AZURE_BOOKINGS_DB_PASSWORD" mcr.microsoft.com/mssql/server:2022-latest /opt/mssql-tools18/bin/sqlcmd -S tcp:nchachia-ieu2024-sql2.database.windows.net,1433 -U bookings_user -d nchachia-ieu2024-bookings-db -N -b -Q "SELECT DB_NAME() AS my_database, USER_NAME() AS me"
+docker run --rm --platform linux/amd64 -e SQLCMDPASSWORD="$AZURE_BOOKINGS_DB_PASSWORD" mcr.microsoft.com/mssql/server:2022-latest /opt/mssql-tools18/bin/sqlcmd -S tcp:nchachia-ieu2024-sql2.database.windows.net,1433 -U bookings_user -d nchachia-ieu2024-ladder-db -N -b -Q "SELECT 1"
+docker run --rm --platform linux/amd64 -e SQLCMDPASSWORD="$AZURE_LADDER_DB_PASSWORD" mcr.microsoft.com/mssql/server:2022-latest /opt/mssql-tools18/bin/sqlcmd -S tcp:nchachia-ieu2024-sql2.database.windows.net,1433 -U ladder_user -d nchachia-ieu2024-ladder-db -N -b -Q "SELECT DB_NAME() AS my_database, USER_NAME() AS me"
+
+az sql server firewall-rule delete --resource-group rg-nchachia-ieu2024 --server nchachia-ieu2024-sql2 --name setup-from-my-mac
+```
+
+**5. Container Apps.** Both start with Microsoft's placeholder image; the first deploy replaces it. They scale to zero when idle (`--min-replicas 0`). The database connection, `TOKEN_SECRET`, `CORS_ORIGIN` and `BOOKINGS_URL` are not set here: the deploy workflow sets them on every deploy, the secrets from GitHub secrets as Container Apps secrets.
+
+```bash
+az extension add --name containerapp --upgrade
+az containerapp env create --name nchachia-ieu2024-env --resource-group rg-nchachia-ieu2024 --location polandcentral -o table
+az containerapp create --name nchachia-ieu2024-bookings --resource-group rg-nchachia-ieu2024 --environment nchachia-ieu2024-env --image mcr.microsoft.com/k8se/quickstart:latest --target-port 8000 --ingress external --min-replicas 0 --max-replicas 1 --cpu 0.25 --memory 0.5Gi --query properties.configuration.ingress.fqdn -o tsv
+az containerapp create --name nchachia-ieu2024-ladder --resource-group rg-nchachia-ieu2024 --environment nchachia-ieu2024-env --image mcr.microsoft.com/k8se/quickstart:latest --target-port 8000 --ingress external --min-replicas 0 --max-replicas 1 --cpu 0.25 --memory 0.5Gi --query properties.configuration.ingress.fqdn -o tsv
+```
+
+Their addresses:
+- bookings: https://nchachia-ieu2024-bookings.salmonplant-4fba6716.polandcentral.azurecontainerapps.io
+- ladder: https://nchachia-ieu2024-ladder.salmonplant-4fba6716.polandcentral.azurecontainerapps.io
+
+**6. The pipeline's identity.** GitHub Actions signs in as this managed identity with OIDC, so no Azure password exists anywhere. It is Contributor on this resource group only. GitHub sends this repository's subject with numeric IDs, so both forms are registered. They are in single quotes so zsh cannot change them.
+
+```bash
+az identity create --name nchachia-ieu2024-github --resource-group rg-nchachia-ieu2024 --location polandcentral -o none
+principal=$(az identity show --name nchachia-ieu2024-github --resource-group rg-nchachia-ieu2024 --query principalId -o tsv)
+rg_id=$(az group show --name rg-nchachia-ieu2024 --query id -o tsv)
+az role assignment create --assignee-object-id "$principal" --assignee-principal-type ServicePrincipal --role Contributor --scope "$rg_id" -o none
+gh api repos/nika140906/padel-club/actions/oidc/customization/sub    # shows the subject format GitHub uses
+az identity federated-credential create --name github-main --identity-name nchachia-ieu2024-github --resource-group rg-nchachia-ieu2024 --issuer https://token.actions.githubusercontent.com --audiences api://AzureADTokenExchange --subject 'repo:nika140906/padel-club:ref:refs/heads/main' -o none
+az identity federated-credential create --name github-main-ids --identity-name nchachia-ieu2024-github --resource-group rg-nchachia-ieu2024 --issuer https://token.actions.githubusercontent.com --audiences api://AzureADTokenExchange --subject 'repo:nika140906@233967632/padel-club@1391312057:ref:refs/heads/main' -o none
+az identity federated-credential list --identity-name nchachia-ieu2024-github --resource-group rg-nchachia-ieu2024 --query "[].subject" -o tsv
+```
+
+**7. GitHub secrets and variables.** Each value goes from `az`, `openssl` or `.env.azure` straight into GitHub through a pipe, so it is never shown or written to a tracked file.
+
+```bash
+# made once:  { echo "AZURE_SQL_ADMIN_PASSWORD=Pw1-$(openssl rand -hex 16)"; ... } > .env.azure
+az identity show --name nchachia-ieu2024-github --resource-group rg-nchachia-ieu2024 --query clientId -o tsv | gh secret set AZURE_CLIENT_ID
+az account show --query tenantId -o tsv | gh secret set AZURE_TENANT_ID
+az account show --query id -o tsv | gh secret set AZURE_SUBSCRIPTION_ID
+openssl rand -hex 32 | gh secret set TOKEN_SECRET
+grep '^AZURE_BOOKINGS_DB_PASSWORD=' .env.azure | cut -d= -f2- | tr -d '\n' | gh secret set BOOKINGS_DB_PASSWORD
+grep '^AZURE_LADDER_DB_PASSWORD=' .env.azure | cut -d= -f2- | tr -d '\n' | gh secret set LADDER_DB_PASSWORD
+gh variable set PREFIX --body nchachia-ieu2024
+gh variable set RESOURCE_GROUP --body rg-nchachia-ieu2024
+gh variable set UI_STORAGE --body nchachiaieu2024ui
+```
+
+**9. Read access for the professors.**
+
+```bash
+az role assignment create --assignee amartini@faculty.ie.edu --role Reader --scope "$rg_id" -o none
+az role assignment create --assignee bserra@faculty.ie.edu --role Reader --scope "$rg_id" -o none
 ```
