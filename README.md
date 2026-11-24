@@ -72,7 +72,7 @@ Each service reads:
 | Variable       | Default | Purpose |
 |----------------|---------|---------|
 | `PORT`         | `8000`  | Port the service listens on (binds to 0.0.0.0) |
-| `DATABASE_URL` | none, required, secret | The service's own database, as `mssql://user:password@host:1433/database` |
+| `DATABASE_URL` | none, required, secret | The service's own database, as `mssql://user:password@host:1433/database`. On Azure it ends in `?encrypt=true`, because Azure SQL only accepts encrypted connections |
 | `TOKEN_SECRET` | none, required, secret | Signs and checks login tokens. Must be the same in both services |
 | `CORS_ORIGIN`  | `http://localhost:8080` | The UI's origin, the only website allowed to call the service from a browser |
 | `GIT_SHA`      | `dev` | The commit the image was built from, shown by `/health`. Set at build time with `--build-arg GIT_SHA=<sha>` |
@@ -84,7 +84,7 @@ The ladder service also reads:
 | `BOOKINGS_URL`       | `http://bookings:8000` | Base URL of the bookings service |
 | `BOOKINGS_TIMEOUT_S` | `3` | Seconds to wait for bookings before joining fails with `503` |
 
-A service refuses to start if `DATABASE_URL` or `TOKEN_SECRET` is missing.
+A service refuses to start if `DATABASE_URL` or `TOKEN_SECRET` is missing. If the database is not ready yet (on Azure, a paused database takes about a minute to resume: errors 40613, 20002 and 20003), the service keeps trying to connect for about two minutes at startup, waiting a little longer each time. A request retries twice, after 1 and 2 seconds. Any other error, such as a wrong password, fails straight away.
 
 ## The UI
 
@@ -163,11 +163,11 @@ Latest result: bookings 115 tests, ladder 87 tests, both at 99% coverage (the on
 |---|---|
 | Lint | `ruff check services`, with the settings in `ruff.toml` |
 | Tests (bookings), Tests (ladder) | Each service's tests against its own SQL Server container, started fresh for the run. Fails below 70% coverage for the whole service, and again below 70% for its business rules (`padel/*/service.py`) alone |
-| Validate API files | Both `openapi.yaml` files against the OpenAPI specification |
+| Validate API and system files | Both `openapi.yaml` files against the OpenAPI specification, and `system.yaml` against `system.schema.json` |
 | Build image (bookings), Build image (ladder) | Each Dockerfile builds; the image is not pushed |
 | Scan for secrets | gitleaks over every new commit in the push or pull request, not only the last one, so a secret removed in a later commit is still caught. Before pushing, `gitleaks git .` checks the whole history locally |
 
-CI never connects to Azure. The test SQL Server gets a new random password on every run, hidden in the logs, so no password is written in the workflow. Checking `system.yaml` against `system.schema.json` will be added once the course publishes the schema.
+CI never connects to Azure. The test SQL Server gets a new random password on every run, hidden in the logs, so no password is written in the workflow. On `main`, CI does not run by itself: the deploy workflow runs it first (see step 8 of the Azure setup).
 
 Run the same lint and coverage checks locally (with the test database from above):
 
@@ -285,6 +285,23 @@ grep '^AZURE_LADDER_DB_PASSWORD=' .env.azure | cut -d= -f2- | tr -d '\n' | gh se
 gh variable set PREFIX --body nchachia-ieu2024
 gh variable set RESOURCE_GROUP --body rg-nchachia-ieu2024
 gh variable set UI_STORAGE --body nchachiaieu2024ui
+```
+
+**8. The deploy workflow.** `.github/workflows/deploy.yml` runs on every push to `main` (so on every merged pull request), and can be started by hand from the Actions tab. It has four jobs, each starting only if the one before passed:
+
+| Job | What it does |
+|---|---|
+| CI | All of `ci.yml`, on this exact commit (CI's own `push:` trigger skips `main`, so it does not run twice) |
+| Push image (bookings), Push image (ladder) | Builds each image again (mostly from CI's cache) and pushes it to `ghcr.io/nika140906/padel-<service>:<commit sha>`, with `provenance: false` |
+| Deploy to Azure | Signs in as `nchachia-ieu2024-github` with OIDC. Saves `DATABASE_URL` and `TOKEN_SECRET` as Container Apps secrets, points each Container App at its new image with `secretref:` to them, `CORS_ORIGIN` set to the UI's address, and the ladder's `BOOKINGS_URL` set to bookings. Then writes `ui/config.js` with both addresses and uploads `ui/` to the `$web` container. Last, it calls `/health` on each service every 10 seconds for up to 8 minutes, and fails unless both answer `200` with this commit's SHA |
+
+The very first deploy fails on purpose: new GHCR packages are private, so Azure cannot pull them. After that run, in GitHub → profile → Packages, open `padel-bookings` and `padel-ladder`, and under "Package settings" change the visibility to public. Then re-run the failed job. The images hold no secrets, only the code that is already in this public repository.
+
+If a deploy fails, the last step prints each Container App's logs. To watch them live:
+
+```bash
+az containerapp logs show --name nchachia-ieu2024-bookings --resource-group rg-nchachia-ieu2024 --follow
+az containerapp logs show --name nchachia-ieu2024-bookings --resource-group rg-nchachia-ieu2024 --type system   # start-up and probe events
 ```
 
 **9. Read access for the professors.**

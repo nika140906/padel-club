@@ -1,0 +1,186 @@
+# CD: deploys main to Azure.
+#
+# On every push to main it first runs all of CI (ci.yml). Only if every CI job
+# passes does it push the two images to GHCR, point each Container App at its
+# new image, publish the UI, and wait for both /health checks to answer 200
+# with the new commit. The run fails if any step does.
+#
+# No Azure password exists anywhere: the deploy job signs in as the managed
+# identity nchachia-ieu2024-github with OIDC (README "Azure setup", step 6).
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # lets me re-run a deploy of main by hand, from the Actions tab
+
+# Never two deploys at the same time: a newer one waits for the older one to finish.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+  PREFIX: ${{ vars.PREFIX }}
+  # The SQL server ends in -sql2, not -sql: see README "Azure setup", step 4.
+  SQL_HOST: ${{ vars.PREFIX }}-sql2.database.windows.net
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: read # the secret scan job in ci.yml asks for it
+
+  push-images:
+    name: Push image (${{ matrix.service }})
+    needs: ci
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write # to push to GHCR, this repository's own registry
+    strategy:
+      matrix:
+        service: [bookings, ladder]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }} # made by GitHub for this run only
+      # The same build CI just checked, mostly from its cache. The tag is the
+      # commit, so every image says exactly which code is inside it.
+      - uses: docker/build-push-action@v7
+        with:
+          context: services/${{ matrix.service }}
+          tags: ${{ env.REGISTRY }}/padel-${{ matrix.service }}:${{ github.sha }}
+          build-args: GIT_SHA=${{ github.sha }}
+          push: true
+          provenance: false # Azure Container Apps cannot pull images that carry provenance data
+          cache-from: type=gha,scope=${{ matrix.service }}
+
+  deploy:
+    name: Deploy to Azure
+    needs: push-images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # lets azure/login ask GitHub for a short-lived OIDC token
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install the Container Apps commands for az
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      # The addresses come from Azure, so none is written in this file. The UI's
+      # address is the only origin the services accept (CORS_ORIGIN); Azure
+      # gives it with a "/" at the end, which an origin never has.
+      - name: Find the addresses
+        run: |
+          ui_url=$(az storage account show --name "${{ vars.UI_STORAGE }}" --resource-group "$RESOURCE_GROUP" \
+            --query primaryEndpoints.web -o tsv)
+          bookings_host=$(az containerapp show --name "$PREFIX-bookings" --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          ladder_host=$(az containerapp show --name "$PREFIX-ladder" --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          # Saved for the next steps (and shown in the log by tee).
+          {
+            echo "UI_URL=${ui_url%/}"
+            echo "BOOKINGS_HOST=$bookings_host"
+            echo "LADDER_HOST=$ladder_host"
+          } | tee -a "$GITHUB_ENV"
+
+      # Secrets go into Container Apps secrets, and the app only sees them
+      # through secretref:, so no value is ever printed. GitHub also hides
+      # every secret's value in the logs. Each update makes a new revision,
+      # which starts with the new image, settings and secrets.
+      - name: Deploy bookings
+        env:
+          DB_PASSWORD: ${{ secrets.BOOKINGS_DB_PASSWORD }}
+          TOKEN_SECRET: ${{ secrets.TOKEN_SECRET }}
+        run: |
+          app="$PREFIX-bookings"
+          database_url="mssql://bookings_user:$DB_PASSWORD@$SQL_HOST:1433/$PREFIX-bookings-db?encrypt=true"
+          az containerapp secret set --name "$app" --resource-group "$RESOURCE_GROUP" \
+            --secrets database-url="$database_url" token-secret="$TOKEN_SECRET" -o none
+          az containerapp update --name "$app" --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY/padel-bookings:$GITHUB_SHA" \
+            --set-env-vars DATABASE_URL=secretref:database-url TOKEN_SECRET=secretref:token-secret \
+                           CORS_ORIGIN="$UI_URL" \
+            -o none
+
+      - name: Deploy ladder
+        env:
+          DB_PASSWORD: ${{ secrets.LADDER_DB_PASSWORD }}
+          TOKEN_SECRET: ${{ secrets.TOKEN_SECRET }}
+        run: |
+          app="$PREFIX-ladder"
+          database_url="mssql://ladder_user:$DB_PASSWORD@$SQL_HOST:1433/$PREFIX-ladder-db?encrypt=true"
+          az containerapp secret set --name "$app" --resource-group "$RESOURCE_GROUP" \
+            --secrets database-url="$database_url" token-secret="$TOKEN_SECRET" -o none
+          az containerapp update --name "$app" --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY/padel-ladder:$GITHUB_SHA" \
+            --set-env-vars DATABASE_URL=secretref:database-url TOKEN_SECRET=secretref:token-secret \
+                           CORS_ORIGIN="$UI_URL" BOOKINGS_URL="https://$BOOKINGS_HOST" \
+            -o none
+
+      # The UI finds the services through config.js, so it is written here
+      # with their Azure addresses, then the whole ui/ folder is uploaded.
+      # "no-cache" makes browsers ask for new files after every deploy.
+      - name: Publish the UI
+        run: |
+          cat > ui/config.js <<EOF
+          // Written by the deploy workflow for commit $GITHUB_SHA.
+          window.PADEL_CONFIG = {
+            bookingsUrl: "https://$BOOKINGS_HOST",
+            ladderUrl: "https://$LADDER_HOST",
+          };
+          EOF
+          cat ui/config.js
+          # '$web' is in single quotes on purpose: it is the container's real name, not a variable.
+          # shellcheck disable=SC2016
+          az storage blob upload-batch --account-name "${{ vars.UI_STORAGE }}" --auth-mode key \
+            --destination '$web' --source ui --overwrite --content-cache-control "no-cache" -o none
+
+      # A container that scaled to zero, and a database that paused, can take a
+      # few minutes to start. Wait up to 8 minutes for each /health to answer
+      # 200 with this commit's SHA, so the run only passes once the new code is live.
+      - name: Wait until both services are healthy
+        run: |
+          for host in "$BOOKINGS_HOST" "$LADDER_HOST"; do
+            deadline=$((SECONDS + 480))
+            until [ "$(curl --silent --fail --max-time 30 "https://$host/health" | jq -r .version)" = "$GITHUB_SHA" ]; do
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "$host: /health did not answer 200 with version $GITHUB_SHA within 8 minutes"
+                exit 1
+              fi
+              echo "$host: not healthy yet, trying again in 10 seconds"
+              sleep 10
+            done
+            echo "$host: healthy, running $GITHUB_SHA"
+          done
+
+      # Only when something failed: show the last start-up events of each app, to see why.
+      - name: Show the Container Apps logs
+        if: failure()
+        run: |
+          for service in bookings ladder; do
+            echo "::group::$service system log"
+            az containerapp logs show --name "$PREFIX-$service" --resource-group "$RESOURCE_GROUP" --type system --tail 30 || true
+            echo "::endgroup::"
+            echo "::group::$service app log"
+            az containerapp logs show --name "$PREFIX-$service" --resource-group "$RESOURCE_GROUP" --tail 30 || true
+            echo "::endgroup::"
+          done
