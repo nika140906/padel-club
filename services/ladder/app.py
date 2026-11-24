@@ -3,7 +3,7 @@ import os
 
 from flask import Flask
 
-from padel.db import close_db, connect
+from padel.db import STARTUP_RETRY_DELAYS, close_db, connect
 from padel.ladder.routes import bp as ladder_bp
 from padel.migrate import migrate
 from padel.web import setup_cors, setup_health, setup_request_logs
@@ -38,8 +38,9 @@ def create_app(database_url=None, token_secret=None, bookings_url=None):
     # The Git commit this image was built from, shown by /health.
     app.config["VERSION"] = os.environ.get("GIT_SHA", "dev")
 
-    # Bring the database schema up to date before serving any request.
-    conn = connect(database_url)
+    # Bring the database schema up to date before serving any request. On Azure the
+    # database may be paused and need about a minute to resume, so keep trying.
+    conn = connect(database_url, retry_delays=STARTUP_RETRY_DELAYS, login_timeout=15)
     try:
         migrate(conn)
     finally:

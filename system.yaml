@@ -31,7 +31,7 @@ services:
         description: Port the web server listens on.
         default: 8000
       DATABASE_URL:
-        description: "Connection to this service's own database: mssql://<user>:<password>@<host>:<port>/<database>."
+        description: "Connection to this service's own database: mssql://<user>:<password>@<host>:<port>/<database>, ending in ?encrypt=true on Azure SQL."
         secret: true
       TOKEN_SECRET:
         description: Signs and checks login tokens. Both services get the same value.
@@ -58,7 +58,7 @@ services:
         description: Port the web server listens on.
         default: 8000
       DATABASE_URL:
-        description: "Connection to this service's own database: mssql://<user>:<password>@<host>:<port>/<database>."
+        description: "Connection to this service's own database: mssql://<user>:<password>@<host>:<port>/<database>, ending in ?encrypt=true on Azure SQL."
         secret: true
       TOKEN_SECRET:
         description: Checks the login tokens made by bookings. Same value as in bookings.
