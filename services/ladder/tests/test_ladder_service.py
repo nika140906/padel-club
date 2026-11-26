@@ -46,7 +46,9 @@ def test_upset_win_is_worth_more_than_expected_win():
 def test_new_player_starts_at_1000_with_no_matches(conn):
     player = join_ladder(conn, 1, "nika")
 
-    assert player == {"user_id": 1, "nickname": "nika", "rating": 1000, "matches_played": 0}
+    assert player == {
+        "user_id": 1, "nickname": "nika", "rating": 1000, "matches_played": 0, "wins": 0,
+    }
 
 
 def test_joining_twice_keeps_the_first_nickname(conn):
@@ -96,6 +98,14 @@ def test_recording_a_match_counts_it_for_all_four_players(four_players):
     record_match(four_players, 1, [1, 2], [3, 4], "A")
 
     assert all(p["matches_played"] == 1 for p in leaderboard(four_players))
+
+
+def test_only_the_winning_team_gets_a_win(four_players):
+    record_match(four_players, 1, [1, 2], [3, 4], "A")
+    record_match(four_players, 3, [1, 3], [2, 4], "B")
+
+    wins = {p["user_id"]: p["wins"] for p in leaderboard(four_players)}
+    assert wins == {1: 1, 2: 2, 3: 0, 4: 1}
 
 
 def test_match_is_saved(four_players):
