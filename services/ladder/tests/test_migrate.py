@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pymssql
 import pytest
 
@@ -22,6 +24,11 @@ def empty_conn():
 
 def write(folder, name, sql):
     (folder / name).write_text(sql)
+
+
+def copy_real_migration(folder, name):
+    """Copy one file from the real migrations folder, to apply them one at a time."""
+    write(folder, name, (Path(MIGRATIONS_DIR) / name).read_text())
 
 
 def test_migration_files_are_sorted_and_other_files_ignored(tmp_path):
@@ -79,3 +86,32 @@ def test_failed_migration_changes_nothing_and_is_not_recorded(empty_conn, tmp_pa
     ).fetchall()
     assert [row["name"] for row in tables] == ["schema_migrations"]
     assert empty_conn.execute("SELECT COUNT(*) AS n FROM schema_migrations").fetchone()["n"] == 0
+
+
+def test_002_fills_in_wins_from_matches_that_already_exist(empty_conn, tmp_path):
+    """The same situation as on Azure: 001 ran long ago and the tables hold data."""
+    copy_real_migration(tmp_path, "001_init.sql")
+    migrate(empty_conn, tmp_path)
+    empty_conn.execute(
+        "INSERT INTO players (user_id, nickname, rating, matches_played) VALUES "
+        "(1, 'nika', 1016, 2), (2, 'alex', 1000, 2), (3, 'sam', 984, 2), (4, 'kim', 1000, 2)"
+    )
+    empty_conn.execute(
+        "INSERT INTO matches (team_a_p1, team_a_p2, team_b_p1, team_b_p2, winner, recorded_by) "
+        "VALUES (1, 2, 3, 4, 'A', 1), (1, 3, 2, 4, 'B', 2)"
+    )
+    empty_conn.commit()
+
+    copy_real_migration(tmp_path, "002_add_wins.sql")
+    assert migrate(empty_conn, tmp_path) == ["002_add_wins.sql"]
+
+    rows = empty_conn.execute(
+        "SELECT user_id, rating, matches_played, wins FROM players ORDER BY user_id"
+    ).fetchall()
+    assert rows == [  # ratings and matches played are untouched
+        {"user_id": 1, "rating": 1016, "matches_played": 2, "wins": 1},
+        {"user_id": 2, "rating": 1000, "matches_played": 2, "wins": 2},
+        {"user_id": 3, "rating": 984, "matches_played": 2, "wins": 0},
+        {"user_id": 4, "rating": 1000, "matches_played": 2, "wins": 1},
+    ]
+    assert empty_conn.execute("SELECT COUNT(*) AS n FROM matches").fetchone()["n"] == 2

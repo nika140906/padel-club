@@ -42,7 +42,7 @@ def join_ladder(conn, user_id, nickname):
 
 def get_player(conn, user_id):
     row = conn.execute(
-        "SELECT user_id, nickname, rating, matches_played FROM players WHERE user_id = %s",
+        "SELECT user_id, nickname, rating, matches_played, wins FROM players WHERE user_id = %s",
         (user_id,),
     ).fetchone()
     return dict(row) if row else None
@@ -76,9 +76,9 @@ def record_match(conn, recorded_by, team_a, team_b, winner):
     change = rating_change(team_a_rating, team_b_rating, winner == "A")
 
     for user_id in team_a:
-        _apply_result(conn, user_id, change)
+        _apply_result(conn, user_id, change, won=winner == "A")
     for user_id in team_b:
-        _apply_result(conn, user_id, -change)
+        _apply_result(conn, user_id, -change, won=winner == "B")
 
     row = conn.execute(
         "INSERT INTO matches (team_a_p1, team_a_p2, team_b_p1, team_b_p2, winner, recorded_by) "
@@ -89,11 +89,11 @@ def record_match(conn, recorded_by, team_a, team_b, winner):
     return {"id": row["id"], "winner": winner, "team_a_change": change, "team_b_change": -change}
 
 
-def _apply_result(conn, user_id, change):
+def _apply_result(conn, user_id, change, won):
     conn.execute(
-        "UPDATE players SET rating = rating + %s, matches_played = matches_played + 1 "
-        "WHERE user_id = %s",
-        (change, user_id),
+        "UPDATE players SET rating = rating + %s, matches_played = matches_played + 1, "
+        "wins = wins + %s WHERE user_id = %s",
+        (change, 1 if won else 0, user_id),
     )
 
 
@@ -103,7 +103,7 @@ def leaderboard(conn):
     Ties go to whoever has played more matches.
     """
     rows = conn.execute(
-        "SELECT user_id, nickname, rating, matches_played FROM players "
+        "SELECT user_id, nickname, rating, matches_played, wins FROM players "
         "ORDER BY rating DESC, matches_played DESC, user_id"
     ).fetchall()
     return [{"rank": rank, **dict(row)} for rank, row in enumerate(rows, start=1)]
