@@ -54,7 +54,7 @@ Consequences: Each domain's tables can be moved to their own database without br
 ## 4. Test the business rules directly against a real SQLite file, and the routes only for status codes and login
 Date: 2026-10-01
 
-Status: Decided
+Status: Superseded by [9]
 
 Context: The brief asks for at least 70% coverage of the core business logic of both domains. The rules that matter most are in each domain's `service.py` (booking overlaps, opening hours, Elo maths, who may cancel or record a match), while the routes only translate HTTP into those calls.
 
@@ -115,3 +115,16 @@ Decision: `deploy.yml` runs all of CI on the commit, pushes SHA-tagged images to
 Alternatives considered: Azure Container Registry was rejected, because even the Basic tier costs credit every day while GHCR is free; the cost is that the two image packages must be public, which is fine since they hold only the code that is already public. A service principal with a client secret in GitHub was rejected, because IE accounts cannot create one and a stored secret can leak, while OIDC tokens last minutes and only work from `main` of this repository. Keeping one replica always running (`--min-replicas 1`) and a database that never pauses were rejected because they would use up the credit without real users; the price is a slow first request.
 
 Consequences: An idle system costs almost nothing, and no Azure password exists anywhere. The cost: after an hour of no use, the first request waits about a minute and may get a 503 once, and a broken deploy is caught by the health check but not rolled back by itself; the fix is to revert the commit on `main`, which redeploys the previous code.
+
+## 9. Run every test against a real SQL Server, and test each migration on rows that already exist
+Date: 2026-11-26
+
+Status: Decided
+
+Context: ADR-4 tested the rules against a real SQLite file, but the services now run on SQL Server, whose SQL differs in ways that matter (`IDENTITY` ids, `OUTPUT INSERTED`, case-sensitive collations, `DATETIME2`). Migration 002 adds a `wins` column to `players` and fills it in from `matches`, and the Azure database already held four players and a match, so it had to work on existing rows the first time.
+
+Decision: The tests keep ADR-4's split (rules through `service.py`, routes only for status codes and login), but run against a real SQL Server named by `TEST_DATABASE_URL`: the compose database locally, and a `docker run` of `mssql/server:2022-latest` with a random masked password in CI. Each run recreates its own `<service>_test` database from the real migrations, and each test starts from empty tables. A migration test copies the real files one at a time: it runs 001, inserts players and matches, runs 002, and checks the new column and that no rating, count or match changed.
+
+Alternatives considered: Keeping SQLite for tests and SQL Server only in production was rejected, because the tests would pass on SQL that production never runs. 002 shows it: SQL Server checks all column names in a file before running any of it, so `UPDATE players SET wins = ...` after `ALTER TABLE players ADD wins` fails with "Invalid column name 'wins'", and the backfill had to go in `EXEC(...)`; SQLite would never have shown that. Testing migrations only by deploying them to Azure was rejected, because a mistake would be found on the only real data.
+
+Consequences: Running the tests needs Docker and a running SQL Server (the ladder's 97 tests take about 7 s locally), and CI first waits for SQL Server to start. In return, the migration ran on Azure the first time (`applied migration 002_add_wins.sql`), with the existing players kept and their wins filled in. I pushed the 002 test before the migration, so CI run 45832131632 failed until the next commit added the file.
