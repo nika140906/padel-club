@@ -158,12 +158,13 @@ components:
 
     Player:
       type: object
-      required: [user_id, nickname, rating, matches_played]
+      required: [user_id, nickname, rating, matches_played, wins]
       properties:
         user_id: { type: integer, description: The member's id in the bookings service }
         nickname: { type: string }
         rating: { type: integer, example: 1000 }
         matches_played: { type: integer }
+        wins: { type: integer, description: Matches this player's team won (added by migration 002) }
 
     RankedPlayer:
       allOf:
