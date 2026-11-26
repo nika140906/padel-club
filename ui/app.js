@@ -64,7 +64,10 @@ function show(panel, text, kind = "error") {
 
 function explain(error, service) {
   if (error instanceof ServiceDown) {
-    return `The ${service} service is not reachable right now. The rest of the page still works. Try again in a minute.`;
+    // On Azure an idle service is woken by the first request, and Azure holds
+    // that request open until the service is ready, which takes longer than
+    // TIMEOUT_MS. So a timeout usually means "waking up", not "broken".
+    return `The ${service} service is not reachable right now. If nobody used it for a while, it is probably waking up, which takes up to a minute. The rest of the page still works. Try again in a minute.`;
   }
   // The service's own message, e.g. "court is already booked at that time".
   return error.message.charAt(0).toUpperCase() + error.message.slice(1);
@@ -251,14 +254,14 @@ async function loadLadder() {
     ]);
 
     $("me").textContent = player
-      ? `You are ${player.nickname}: rating ${player.rating}, ${player.matches_played} matches played.`
+      ? `You are ${player.nickname}: rating ${player.rating}, ${player.wins} of ${player.matches_played} matches won.`
       : "You are not on the ladder yet.";
     $("join-form").hidden = Boolean(player);
 
     $("leaderboard").replaceChildren(
       ...leaderboard.map((p) => {
         const row = document.createElement("tr");
-        for (const value of [p.rank, p.nickname, p.rating, p.matches_played]) {
+        for (const value of [p.rank, p.nickname, p.rating, p.matches_played, p.wins]) {
           const cell = document.createElement("td");
           cell.textContent = value;
           row.append(cell);
