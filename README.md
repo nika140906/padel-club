@@ -295,7 +295,12 @@ gh variable set UI_STORAGE --body nchachiaieu2024ui
 | Push image (bookings), Push image (ladder) | Builds each image again (mostly from CI's cache) and pushes it to `ghcr.io/nika140906/padel-<service>:<commit sha>`, with `provenance: false` |
 | Deploy to Azure | Signs in as `nchachia-ieu2024-github` with OIDC. Saves `DATABASE_URL` and `TOKEN_SECRET` as Container Apps secrets, points each Container App at its new image with `secretref:` to them, `CORS_ORIGIN` set to the UI's address, and the ladder's `BOOKINGS_URL` set to bookings. Then writes `ui/config.js` with both addresses and uploads `ui/` to the `$web` container. Last, it calls `/health` on each service every 10 seconds for up to 8 minutes, and fails unless both answer `200` with this commit's SHA |
 
-The very first deploy fails on purpose: new GHCR packages are private, so Azure cannot pull them. After that run, in GitHub → profile → Packages, open `padel-bookings` and `padel-ladder`, and under "Package settings" change the visibility to public. Then re-run the failed job. The images hold no secrets, only the code that is already in this public repository.
+Azure pulls the images without logging in to GHCR, so both packages must be public. Here the first deploy worked straight away: a package pushed from a workflow is linked to its repository and takes its visibility, and this repository is public. If a package ever shows up as private, the deploy stops at the image pull. Then, in GitHub → profile → Packages, open `padel-bookings` or `padel-ladder`, set the visibility to public under "Package settings", and re-run the failed job. The images hold no secrets, only the code that is already in this public repository. To check without logging in:
+
+```bash
+t=$(curl -s "https://ghcr.io/token?scope=repository:nika140906/padel-bookings:pull" | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $t" https://ghcr.io/v2/nika140906/padel-bookings/tags/list   # 200 = public
+```
 
 If a deploy fails, the last step prints each Container App's logs. To watch them live:
 
